@@ -8,39 +8,76 @@ autonomous development loop controlled by a single orchestration script: mastera
 
 ## Component Stack
 
-| Component | Role |
-|-----------|------|
-| Claude Code CLI | Reasoning anchor, loop session host |
-| Calx / getcalx | Behavioral feedback — injects domain rules, captures corrections |
-| OpenHands | Execution agent — scaffolding, file gen, builds via local model |
-| LiteLLM Proxy | Unified inference router with model alias map (optional) |
-| masterarcade.sh | Orchestrator — the one tool that runs everything |
+| Component | Required | Role |
+|-----------|----------|------|
+| Claude Code CLI | **Required** | Reasoning engine — executes task chunks, emits completion promise |
+| masterarcade.sh | **Required** | Orchestrator — queue, classification, launch, gate, revision |
+| start-arcade.sh | **Required** | Session launcher — model selection, Calx init, claude exec |
+| lib/classify.sh | **Required** | Chunk classification via configured backend or heuristics |
+| lib/gate.sh | **Required** | Feedback gate — evaluates promise token, handles revision triggers |
+| lib/revise.sh | **Required** | Revision logic — SPLIT / REDUCE / HALT decisions |
+| lib/cost_control.sh | **Required** | Spend reporting, balance checks, session summary |
+| Inference backend | **Required** (any one) | Claude Max (OAuth), OpenRouter, Anthropic direct, or LiteLLM proxy |
+| Calx (`getcalx`) | Optional | Behavioral correction — rule injection, drift prevention |
+| OpenHands (or equivalent) | Optional | Execution agent for SCAFFOLD tasks via local model |
+| LiteLLM proxy | Optional | Inference router — model aliases, spend logging, local routing |
+| GitHub integration | Optional | Remote state backup — pushes run-log and queue after each chunk |
+| MCP server/hub | Optional | Agentic control — agents can init, run, and monitor projects via tools |
+| Local inference (Ollama) | Optional | Zero-cost model tier for classification and scaffold execution |
 
 ## Three Launch Modes
 
-| Mode | Routes To | Cost |
-|------|-----------|------|
-| oauth | Native Claude Max subscription | $0 |
-| reasoning | Configured backend (LiteLLM or OpenRouter) → claude-sonnet | pay-per-token |
-| scaffold | Configured backend → claude-haiku | lower cost |
+| Mode | Routes To | Billing |
+|------|-----------|---------|
+| oauth | Claude Max subscription | Monthly subscription quota |
+| reasoning | Configured backend → claude-sonnet | Per token |
+| scaffold | Configured backend → cheaper/local model | Per token or $0 if local |
 
-Execution work delegated to OpenHands routes to a local Ollama model — zero cost.
+Launch modes can alternate between chunks within a single project. A `queue.md` can mix
+REASONING, SCAFFOLD, and OAUTH chunks freely — masterarcade.sh selects the appropriate
+mode per chunk automatically based on the chunk type tag. You do not commit to a single
+mode for the life of a project or session. A common pattern: use OAUTH for the heavy
+reasoning chunks at the start of a project and SCAFFOLD for the mechanical work, minimising
+API spend without manual intervention.
+
+## Why Calx Matters
+
+Claude Code sessions drift. This is not a flaw — it is a natural consequence of how large
+language models work across long sessions. Instructions given at session start lose weight
+as the context grows. CLAUDE.md instructions get buried. A model that starts a session
+carefully following constraints may, ten exchanges later, be improvising freely. For a
+single interactive session this is manageable — a human catches it. For an autonomous loop
+running unattended, it is a failure mode.
+
+Calx addresses this at the session level. It runs as an observer via Claude Code's native
+hook system, checking session behaviour against defined rules at each tool call. When a
+rule fires — Claude ignoring a constraint, attempting a previously failed approach,
+outputting a completion signal prematurely — Calx injects a correction before the next
+exchange. The loop continues. The human does not need to intervene.
+
+In ARCADE's architecture, Calx is the mechanism that makes unattended multi-chunk runs
+viable. Without it, autonomous runs require monitoring. With it, the feedback gate and
+Calx together handle the two most common failure modes: task scope failure (the gate) and
+behavioural drift (Calx). Calx was developed by Spencer Hardwick — see
+[github.com/getcalx/oss](https://github.com/getcalx/oss).
 
 ## Full Loop Flow (Single Iteration)
 
 1. masterarcade.sh reads queue.md from the state directory
-2. Checks issues.md — injects open issues as context prefix
-3. Classifies chunk via Lumina (local model, $0) → REASONING or SCAFFOLD
-4. Launches start-arcade.sh with appropriate mode
-5. Claude Code session starts — Calx hooks activate (SessionStart, PreToolUse, Stop)
-6. Claude Code reads CONTEXT.md and CLAUDE.md at session start
-7. Claude Code executes the task chunk
-8. For execution subtasks: calls openhands_run_task MCP tool if available
-9. Calx orientation gate and collapse guard fire on file edits
-10. Claude Code outputs `<promise>ITERATION_COMPLETE</promise>` when done
-11. masterarcade.sh feedback gate evaluates exit:
-    - Promise fulfilled → mark chunk done, update run-log.md, next chunk
-    - Max iterations hit → revision call (Lumina) → split/reduce chunk → requeue
+2. Checks issues.md — injects open issues as context prefix if any exist
+3. Classifies chunk via configured backend or keyword heuristics → REASONING or SCAFFOLD
+4. Resolves effective mode: SCAFFOLD → scaffold tier, OAUTH → oauth, else project default
+5. For paid modes: checks backend balance; halts if below ARCADE_MIN_BALANCE_USD
+6. Launches start-arcade.sh with appropriate mode and prompt
+7. start-arcade.sh: cds to state dir, runs _calx_ensure (init + hook fetch), execs claude
+8. **Calx SessionStart hook fires** — domain rules injected into session context
+9. Claude Code reads CONTEXT.md and CLAUDE.md, executes the task chunk
+10. **Calx PreToolUse hooks fire** on each Edit/Write call (orientation gate, collapse guard)
+11. Claude Code outputs `<promise>ITERATION_COMPLETE</promise>` when done
+12. **Calx Stop hook fires** — writes .last_clean_exit marker
+13. masterarcade.sh feedback gate evaluates transcript:
+    - Promise found → mark chunk done, log cost+Calx metrics, push to GitHub (if configured)
+    - Max iterations hit → revision call → SPLIT / REDUCE / HALT → requeue or halt
 
 ## Repo Structure
 
@@ -76,16 +113,16 @@ $ARCADE_STATE_ROOT/
     .calx/              (Calx state — created on first run)
 ```
 
-ARCADE_STATE_ROOT defaults to `~/.arcade/projects` and is set in arcade.conf.
+ARCADE_STATE_ROOT defaults to `~/.arcade/projects` and is set in `arcade.conf`.
 
 ## Feedback Gate Logic
 
 ```
 Promise fulfilled    →  mark chunk DONE in queue.md
-                        push run-log.md to Gitea state repo (if configured)
+                        push run-log.md to GitHub state repo (if configured)
                         load next chunk
 
-Max iterations hit  →  call revise.sh (Lumina, free)
+Max iterations hit  →  call revise.sh (fast local model or fallback heuristic)
                         decision:
                           SPLIT   → replace chunk with 2-3 smaller chunks, requeue
                           REDUCE  → scope-down chunk to minimal version, requeue
@@ -94,7 +131,8 @@ Max iterations hit  →  call revise.sh (Lumina, free)
 
 ## Chunk Classification
 
-Each chunk classified before launch via a single Lumina call. Binary and deterministic:
+Each chunk is classified before launch. The classifier tries a configured local model call
+first and falls back to keyword heuristics if no model is available.
 
 | Class | Definition |
 |-------|------------|
@@ -102,18 +140,19 @@ Each chunk classified before launch via a single Lumina call. Binary and determi
 | SCAFFOLD | File creation, boilerplate, refactoring known patterns, builds, format conversion |
 
 REASONING → oauth or configured reasoning model
-SCAFFOLD → claude-haiku or OpenHands directly
+SCAFFOLD → configured cheaper/local model or OpenHands
 
 ## Cost Architecture
 
-- Reasoning (Claude Code) → expensive, minimize with good chunking
-- Execution (OpenHands → local model) → $0, use liberally
-- Classification (Lumina) → $0, run before every chunk
-- Revision (Lumina) → $0, only on gate failure
+- Reasoning chunks → most expensive; minimize with good task decomposition
+- Scaffold chunks → cheaper or free (local model)
+- Classification calls → free if local model configured; minimal API cost otherwise
+- Revision calls → same as classification
+- OpenHands execution tasks → zero cost (local model)
 
 ## Key Decisions
 
 - State in ARCADE_STATE_ROOT, separate from this repo — survives machine rebuilds
-- Loop state in separate arcade-{project} Gitea repo — never pollutes code repo
+- Loop state in separate arcade-{project} GitHub repo — never pollutes code repo
 - Human merge gate for all infrastructure changes
-- GitHub publish is human-gated — public outputs only after review
+- Public code outputs are human-reviewed before publish

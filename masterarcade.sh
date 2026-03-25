@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # masterarcade.sh — ARCADE orchestrator
 # Autonomous Reasoning and Coding Execution
-# https://github.com/moosenet-io/arcade
+# https://github.com/LeMajesticMoose/arcade
 set -euo pipefail
 
 ARCADE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,9 +9,9 @@ LIB_DIR="$ARCADE_ROOT/lib"
 PROJECTS_JSON="$ARCADE_ROOT/projects.json"
 ARCADE_STATE_ROOT="${ARCADE_STATE_ROOT:-${HOME}/.arcade/projects}"
 
-GITEA_BASE="${GITEA_URL:-}"
-GITEA_ORG="${GITEA_ORG:-}"
-GITEA_TOKEN="${GITEA_TOKEN:-}"
+GIT_BASE="${GITHUB_URL:-}"
+GIT_ORG="${GITHUB_ORG:-}"
+GIT_TOKEN="${GITHUB_TOKEN:-}"
 
 START_ARCADE="${ARCADE_ROOT}/start-arcade.sh"
 
@@ -112,8 +112,8 @@ d['$project'].update({
     'name': '$project',
     'mode': '$mode',
     'state_dir': '$ARCADE_STATE_ROOT/$project',
-    'gitea_code_repo': '$GITEA_ORG/$project',
-    'gitea_state_repo': '$GITEA_ORG/arcade-$project',
+    'git_code_repo': '$GIT_ORG/$project',
+    'git_state_repo': '$GIT_ORG/arcade-$project',
     'created': datetime.datetime.utcnow().isoformat(),
     'last_run': None,
     'last_status': None,
@@ -183,51 +183,51 @@ done_count() {
   grep -c '^\s*- \[x\]' "$queue" 2>/dev/null || echo 0
 }
 
-# ── Gitea helpers ─────────────────────────────────────────────────────────────
+# ── Git state repo helpers ─────────────────────────────────────────────────────────────
 
-gitea_repo_exists() {
+git_repo_exists() {
   local repo="$1"
   local status
   status=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: token $GITEA_TOKEN" \
-    "$GITEA_BASE/api/v1/repos/$repo")
+    -H "Authorization: token $GIT_TOKEN" \
+    "$GIT_BASE/api/v1/repos/$repo")
   [ "$status" = "200" ]
 }
 
-gitea_create_repo() {
+git_create_repo() {
   local name="$1" private="${2:-false}" description="${3:-}"
-  curl -s -X POST "$GITEA_BASE/api/v1/orgs/$GITEA_ORG/repos" \
-    -H "Authorization: token $GITEA_TOKEN" \
+  curl -s -X POST "$GIT_BASE/api/v1/orgs/$GIT_ORG/repos" \
+    -H "Authorization: token $GIT_TOKEN" \
     -H "Content-Type: application/json" \
     -d "{\"name\":\"${name}\",\"private\":${private},\"description\":\"${description}\",\"auto_init\":true}" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('html_url','ERROR'))"
 }
 
-gitea_get_sha() {
+git_get_sha() {
   local repo="$1" path="$2"
-  curl -s -H "Authorization: token $GITEA_TOKEN" \
-    "$GITEA_BASE/api/v1/repos/$repo/contents/$path" \
+  curl -s -H "Authorization: token $GIT_TOKEN" \
+    "$GIT_BASE/api/v1/repos/$repo/contents/$path" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || true
 }
 
-gitea_push_file() {
+git_push_file() {
   local repo="$1" path="$2" local_file="$3" message="$4"
-  # No-op if Gitea is not configured
-  [ -n "$GITEA_BASE" ] && [ -n "$GITEA_TOKEN" ] || return 0
+  # No-op if GitHub/Git integration is not configured
+  [ -n "$GIT_BASE" ] && [ -n "$GIT_TOKEN" ] || return 0
   local content sha method url
   content=$(base64 -w0 < "$local_file")
-  sha=$(gitea_get_sha "$repo" "$path")
+  sha=$(git_get_sha "$repo" "$path")
   if [ -n "$sha" ]; then
     method="PUT"
-    url="$GITEA_BASE/api/v1/repos/$repo/contents/$path"
+    url="$GIT_BASE/api/v1/repos/$repo/contents/$path"
     curl -s -X PUT "$url" \
-      -H "Authorization: token $GITEA_TOKEN" \
+      -H "Authorization: token $GIT_TOKEN" \
       -H "Content-Type: application/json" \
       -d "{\"message\":\"${message}\",\"content\":\"${content}\",\"sha\":\"${sha}\"}" \
       | python3 -c "import json,sys; d=json.load(sys.stdin); c=d.get('content',{}); print('updated: ' + c.get('path','?'))" 2>/dev/null || true
   else
-    curl -s -X POST "$GITEA_BASE/api/v1/repos/$repo/contents/$path" \
-      -H "Authorization: token $GITEA_TOKEN" \
+    curl -s -X POST "$GIT_BASE/api/v1/repos/$repo/contents/$path" \
+      -H "Authorization: token $GIT_TOKEN" \
       -H "Content-Type: application/json" \
       -d "{\"message\":\"${message}\",\"content\":\"${content}\"}" \
       | python3 -c "import json,sys; d=json.load(sys.stdin); c=d.get('content',{}); print('created: ' + c.get('path','?'))" 2>/dev/null || true
@@ -246,22 +246,22 @@ cmd_init() {
   log "Initializing project: $project"
 
   # 1. Create code repo
-  local code_repo="${GITEA_ORG}/${project}"
-  local state_repo="${GITEA_ORG}/arcade-${project}"
+  local code_repo="${GIT_ORG}/${project}"
+  local state_repo="${GIT_ORG}/arcade-${project}"
 
-  if gitea_repo_exists "$code_repo"; then
+  if git_repo_exists "$code_repo"; then
     log "Code repo already exists: $code_repo"
   else
     log "Creating code repo: $code_repo"
-    gitea_create_repo "$project" "false" "ARCADE project: $project"
+    git_create_repo "$project" "false" "ARCADE project: $project"
   fi
 
   # 2. Create state repo (private)
-  if gitea_repo_exists "$state_repo"; then
+  if git_repo_exists "$state_repo"; then
     log "State repo already exists: $state_repo"
   else
     log "Creating state repo: $state_repo (private)"
-    gitea_create_repo "arcade-${project}" "true" "ARCADE loop state: $project"
+    git_create_repo "arcade-${project}" "true" "ARCADE loop state: $project"
   fi
 
   # 3. Set up state directory
@@ -313,7 +313,7 @@ CEOF
   log "Pushing state files to $state_repo"
   for f in queue.md issues.md run-log.md CONTEXT.md; do
     if [ -f "$state_dir_path/$f" ]; then
-      gitea_push_file "$state_repo" "$f" "$state_dir_path/$f" \
+      git_push_file "$state_repo" "$f" "$state_dir_path/$f" \
         "chore(init): initialize $f for $project"
     fi
   done
@@ -323,8 +323,8 @@ CEOF
   log "Registered in projects.json"
 
   log "Init complete for: $project"
-  log "  Code repo:  $GITEA_BASE/$code_repo"
-  log "  State repo: $GITEA_BASE/$state_repo"
+  log "  Code repo:  $GIT_BASE/$code_repo"
+  log "  State repo: $GIT_BASE/$state_repo"
   log "  State dir:  $state_dir_path"
   log ""
   log "Next: add tasks with --add-task, then run --project $project"
@@ -425,7 +425,7 @@ cmd_run() {
   local queue="$d/queue.md"
   local issues_file="$d/issues.md"
   local runlog="$d/run-log.md"
-  local state_repo="${GITEA_ORG}/arcade-${project}"
+  local state_repo="${GIT_ORG}/arcade-${project}"
 
   # Resolve mode from projects.json if not overridden
   if [ -z "$mode" ]; then
@@ -469,8 +469,8 @@ cmd_run() {
       chunk_class="SCAFFOLD"
     elif echo "$chunk_line" | grep -qi '\[OAUTH\]'; then
       chunk_class="OAUTH"
-    elif echo "$chunk_line" | grep -qi '\[GAUNTLET\]'; then
-      chunk_class="GAUNTLET"
+    elif echo "$chunk_line" | grep -qi '\[CI-GATE-TEST\]'; then
+      chunk_class="CI-GATE-TEST"
     else
       chunk_class=$(classify_chunk "$chunk")
     fi
@@ -573,8 +573,8 @@ cmd_run() {
         CHUNK_STATUS="DONE" report_chunk_cost "$d" "$iteration" "$effective_mode"
         # Budget check after cost is logged
         check_budget_halt "$d"
-        # Sync run-log to Gitea
-        gitea_push_file "$state_repo" "run-log.md" "$runlog" \
+        # Sync run-log to state repo
+        git_push_file "$state_repo" "run-log.md" "$runlog" \
           "chore(run): update run-log after chunk $iteration"
         break
       fi
@@ -588,9 +588,9 @@ cmd_run() {
         revise_decision=$(revise_chunk "$chunk" "$d/issues.md" "$queue" "$d")
         log "Revise decision: $revise_decision"
         # Sync after revision
-        gitea_push_file "$state_repo" "run-log.md" "$runlog" \
+        git_push_file "$state_repo" "run-log.md" "$runlog" \
           "chore(run): update run-log after chunk $iteration revision"
-        gitea_push_file "$state_repo" "queue.md" "$queue" \
+        git_push_file "$state_repo" "queue.md" "$queue" \
           "chore(queue): update queue after revision decision"
         break
       fi

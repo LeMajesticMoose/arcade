@@ -43,16 +43,16 @@ See arcade.conf.example for the full list of variables.
 
 | Mode | Model tag | Notes |
 |------|-----------|-------|
-| oauth | claude-sonnet (native Max sub) | $0 |
+| oauth | claude-sonnet (Claude Max subscription) | subscription billing |
 | reasoning | claude-sonnet via configured backend | pay-per-token |
 | scaffold | claude-haiku via configured backend | lower cost |
 | agent-lite | local model via LiteLLM | $0 if configured |
 
-## Gitea Push Pattern
+## GitHub Push Pattern
 
-If GITEA_URL, GITEA_TOKEN, and GITEA_ORG are configured in arcade.conf, the loop
+If GITHUB_URL, GITHUB_TOKEN, and GITHUB_ORG are configured in arcade.conf, the loop
 automatically pushes run-log.md and queue.md updates to the state repo after each chunk.
-If Gitea is not configured, state is managed locally only.
+If GitHub is not configured, state is managed locally only.
 
 ## Do Not
 

@@ -1,69 +1,80 @@
 # ARCADE — Advanced Setup
 
-For power users who want model routing, local inference, secrets management, and agent integration.
+For users deploying at Standard or Distributed tier: model routing, local inference,
+secrets management, agent integration, and the distributed architecture overview.
 
 ---
 
 ## LiteLLM proxy
 
-LiteLLM sits between ARCADE and your inference providers. It handles model alias translation, fallbacks, spend logging, and routing to local Ollama. Once deployed, Claude Code never needs to know which actual model it's calling.
+LiteLLM sits between ARCADE and your inference providers. It handles model alias
+translation, fallbacks, spend logging, and routing to local Ollama. Once deployed,
+Claude Code never needs to know which actual model it's calling.
 
 ### Why the alias map matters
 
-Claude Code sends specific model strings (`claude-sonnet-4-6`, `claude-sonnet-4.6[1m]`) that change with releases. The alias map absorbs any variant and routes it to your stable internal name. When Anthropic releases a new model, you update one line in LiteLLM config — not every script.
+Claude Code sends specific model strings (`claude-sonnet-4-6`, `claude-sonnet-4.6[1m]`)
+that change with releases. The alias map absorbs any variant and routes it to your stable
+internal name. When Anthropic releases a new model, you update one line in LiteLLM config
+— not every script.
 
-### Minimal LiteLLM config
+### Model aliases — user-defined
+
+Users define their own model aliases in their LiteLLM config. ARCADE reads whatever
+`ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` point to — the alias map is entirely
+user-managed. Define aliases that match your available models and infrastructure.
+
+Example config structure (fill in your own model names):
 
 ```yaml
 litellm_settings:
   drop_params: true
   model_alias_map:
-    "claude-sonnet-4-6":          "claude-sonnet"
-    "claude-sonnet-4.6":          "claude-sonnet"
-    "claude-sonnet-4.6[1m]":      "claude-sonnet"
-    "claude-3-5-sonnet-20241022": "claude-sonnet"
-    "claude-haiku-4-5":           "claude-haiku"
-    "claude-haiku-4.5":           "claude-haiku"
-    "claude-opus-4-6":            "claude-opus"
+    "claude-sonnet-4-6":          "my-reasoning-model"
+    "claude-sonnet-4.6":          "my-reasoning-model"
+    "claude-sonnet-4.6[1m]":      "my-reasoning-model"
+    "claude-haiku-4-5":           "my-scaffold-model"
+    "claude-haiku-4.5":           "my-scaffold-model"
 
 router_settings:
   fallbacks:
-    - {"default-coder": ["openrouter-free"]}
+    - {"my-coder": ["openrouter-free"]}
   num_retries: 1
 
 model_list:
-  - model_name: claude-sonnet
+  - model_name: my-reasoning-model    # your alias — use this in ARCADE config
     litellm_params:
-      model: openrouter/anthropic/claude-sonnet-4.6
+      model: openrouter/YOUR_PREFERRED_REASONING_MODEL
       api_base: https://openrouter.ai/api/v1
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: claude-haiku
+  - model_name: my-scaffold-model
     litellm_params:
-      model: openrouter/anthropic/claude-haiku-4.5
+      model: openrouter/YOUR_PREFERRED_SCAFFOLD_MODEL
       api_base: https://openrouter.ai/api/v1
       api_key: os.environ/OPENROUTER_API_KEY
 
-  - model_name: openrouter-auto
+  - model_name: my-coder             # user-defined alias for local coder model
     litellm_params:
-      model: openrouter/auto
-      api_base: https://openrouter.ai/api/v1
-      api_key: os.environ/OPENROUTER_API_KEY
+      model: ollama/YOUR_LOCAL_CODER_MODEL
+      api_base: http://your-ollama-host:11434
+      think: false
 
-  - model_name: openrouter-free
+  - model_name: my-classifier        # fast small model for classification
     litellm_params:
-      model: openrouter/google/gemini-2.5-flash
-      api_base: https://openrouter.ai/api/v1
-      api_key: os.environ/OPENROUTER_API_KEY
+      model: ollama/YOUR_LOCAL_FAST_MODEL
+      api_base: http://your-ollama-host:11434
+      think: false
 ```
 
 ### Connecting ARCADE to LiteLLM
 
 ```bash
-# In .env or start-arcade.sh
-ANTHROPIC_API_KEY=your-litellm-master-key
-ANTHROPIC_BASE_URL=http://your-litellm-host:4000
-ANTHROPIC_MODEL=claude-sonnet
+# In arcade.conf
+ANTHROPIC_API_KEY="your-litellm-master-key"
+ANTHROPIC_BASE_URL="http://your-litellm-host:4000"
+LITELLM_MASTER_KEY="your-litellm-master-key"
+LITELLM_URL="http://your-litellm-host:4000"
 ```
 
 ---
@@ -72,44 +83,61 @@ ANTHROPIC_MODEL=claude-sonnet
 
 ### Why local models
 
-- Scaffolding tasks (file gen, boilerplate, format conversion) don't need Claude-quality reasoning
-- Local models via Ollama run at LAN speed for $0
-- OpenHands uses `default-coder` (qwen2.5-coder:7b) for all execution tasks
+- Scaffold tasks (file gen, boilerplate, format conversion) don't need frontier-model reasoning
+- Local models via Ollama run at LAN speed for zero token cost
+- Classification and revision calls are cheap either way — local models eliminate them entirely
 
-### Recommended models
+### Model tier roles
 
-| Model | Size | Use case |
+Model availability and rankings change rapidly. The following describes the functional
+roles; consult current [Ollama model listings](https://ollama.com/library) and
+[OpenRouter's model directory](https://openrouter.ai/models) for current recommendations.
+
+| Role | Parameter range | Examples (illustrative — not prescriptive) |
 |---|---|---|
-| `qwen2.5-coder:7b` | ~5GB | Code scaffolding, OpenHands execution tier |
-| `qwen3.5:9b` | ~6GB | General inference, Lumina tier |
-| `qwen3.5:0.8b` | ~600MB | Chunk classification, revision calls (agent-lite) |
-| `gemma3:4b` | ~3GB | Vision tasks, screenshot analysis |
+| Fast classifier / revision | 0.5B–1.5B | Small, fast instruct models |
+| Scaffold / code generation | 7B–14B | Capable open-source coder models |
+| General reasoning | 30B+ | Large reasoning-capable models |
+| Vision tasks | varies | Multimodal models with vision support |
+
+Note: specific model names are intentionally omitted. Rankings, capabilities, and
+availability evolve faster than documentation. Always evaluate against your current use case.
 
 ### Add to LiteLLM config
 
 ```yaml
-  - model_name: default-coder
+  - model_name: your-coder-alias
     litellm_params:
-      model: ollama/qwen2.5-coder:7b
+      model: ollama/YOUR_CODER_MODEL
       api_base: http://your-ollama-host:11434
       think: false
 
-  - model_name: agent-lite
+  - model_name: your-classifier-alias
     litellm_params:
-      model: ollama/qwen3.5:0.8b
+      model: ollama/YOUR_FAST_MODEL
       api_base: http://your-ollama-host:11434
       think: false
 ```
 
-### Chunk classification with agent-lite
+### Chunk classification
 
-When `agent-lite` is available, `classify.sh` calls it for binary REASONING/SCAFFOLD classification. If no local model is available, it falls back to keyword heuristics (still accurate for most tasks).
+When a local model alias is available and `LUMINA_URL` is configured, `classify.sh`
+calls it for binary REASONING/SCAFFOLD classification. If no model is reachable, it falls
+back to keyword heuristics (accurate for most tasks).
 
 ---
 
 ## OpenHands execution tier
 
-OpenHands is the free execution engine. Claude Code delegates scaffolding work to it via an MCP tool call — the ARCADE iteration continues normally while OpenHands handles the mechanical work.
+OpenHands is the reference implementation for ARCADE's SCAFFOLD execution layer. Claude
+Code delegates scaffolding work to it via an MCP tool call — the ARCADE iteration
+continues normally while OpenHands handles the mechanical work.
+
+**Note:** OpenHands is not the only option. Any tool that can receive a task description
+and a working directory and return file changes can fill this role. The interface contract
+is minimal: task description in, modified files out. Alternative tools worth evaluating
+include Aider, Sweep, and similar agentic coding tools. The `openhands_run_task` MCP tool
+would need to be replaced with an equivalent wrapper for the chosen tool.
 
 ### What OpenHands handles
 
@@ -122,60 +150,58 @@ OpenHands is the free execution engine. Claude Code delegates scaffolding work t
 ### Setup
 
 1. Install OpenHands on the same machine as Claude Code
-2. Point it at LiteLLM with `default-coder` as the model
-3. Deploy `openhands_run_task` MCP tool (see MCP tools section)
+2. Point it at your local inference model (via LiteLLM or direct Ollama)
+3. Deploy `openhands_run_task` MCP tool (see MCP section below)
 4. Add to `CLAUDE.md`: delegate scaffolding tasks via `openhands_run_task`
 
 ### Cost impact
 
-Every task OpenHands handles burns zero API tokens. For a typical development session where 40-60% of work is scaffolding, this halves your token spend.
+Every task OpenHands handles with a local model burns zero API tokens. For projects where
+40-60% of work is scaffolding, this halves API spend.
 
 ---
 
-## Secrets management
+## Credentials and secrets
 
-### Simple approach — .env file
+ARCADE reads credentials from environment variables and `arcade.conf`. How those variables
+are populated is the user's responsibility.
 
-```bash
-ANTHROPIC_API_KEY=...
-OPENROUTER_API_KEY=...
-LITELLM_MASTER_KEY=...
+Common approaches:
+- **Plain `arcade.conf`** — simplest, suitable for single-user setups. `arcade.conf` is gitignored.
+- **Secrets manager CLI** — inject at shell startup or in a wrapper script. Tools like HashiCorp Vault, 1Password CLI, AWS Secrets Manager, and Bitwarden CLI all support exporting secrets as environment variables. ARCADE does not depend on any specific tool.
+- **Secrets injection in your agent framework** — if ARCADE is managed by an agentic system, the agent framework's credential handling applies.
+
+Variables ARCADE reads (from `arcade.conf.example`):
+
 ```
-
-Source in `start-arcade.sh`:
-```bash
-set -a && source ~/.arcade/.env && set +a
+ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL    — inference backend
+OPENROUTER_API_KEY                       — OpenRouter balance checks
+LITELLM_MASTER_KEY, LITELLM_URL          — LiteLLM spend logging
+GITHUB_URL, GITHUB_TOKEN, GITHUB_ORG     — state repo management
+ARCADE_STATE_ROOT                        — where project state lives
+ARCADE_MAX_BUDGET_USD                    — per-session spend cap
+ARCADE_MIN_BALANCE_USD                   — minimum balance before halting
+MAX_ITERATIONS                           — attempts per chunk before revision
+CALX_VENV                                — path to getcalx venv
 ```
-
-### Team approach — Infisical
-
-Infisical is a self-hostable secrets manager with an API. ARCADE retrieves the LiteLLM master key from Infisical at session launch rather than storing it in the script.
-
-```bash
-# Retrieve at launch time
-LITELLM_KEY=$(infisical secrets get LITELLM_MASTER_KEY --plain)
-export ANTHROPIC_API_KEY="$LITELLM_KEY"
-```
-
-Infisical gives you: audit logs, per-service scoping, rotation without touching scripts, and team access control.
 
 ---
 
-## MCP tool server
-
-An MCP server running alongside ARCADE unlocks agent-driven project management. Agents can init projects, start sessions, check status, and query costs — without touching the filesystem directly.
+## MCP deployment options
 
 ### ARCADE MCP tools
+
+An MCP server running alongside ARCADE allows agents to manage projects programmatically:
 
 | Tool | Parameters | Description |
 |---|---|---|
 | `arcade_init_project` | project: str | Creates repos, copies prep files, sets up state directory |
-| `arcade_start_project` | project: str, mode: str | Launches session in tmux. Returns session name. |
+| `arcade_start_project` | project: str, mode: str | Launches session. Returns session name. |
 | `arcade_get_status` | project: str | Returns current chunk, last exit, open issue count |
 | `arcade_list_projects` | none | Returns all projects with status summary |
 | `arcade_add_task` | project: str, task: str | Appends task to queue.md |
 | `arcade_get_cost` | project: str, scope: str | Cost for last_run / session / all_time |
-| `arcade_get_balance` | none | OpenRouter balance, autofill threshold, sessions remaining |
+| `arcade_get_balance` | none | OpenRouter balance and sessions remaining |
 
 ### OpenHands MCP tool
 
@@ -208,78 +234,77 @@ def arcade_start_project(project: str, mode: str = "reasoning") -> dict:
     return {"session": f"arcade-{project}", "status": "launched" if result.returncode == 0 else "failed"}
 ```
 
----
+### Deployment options
 
-## Cost control
+**Local FastMCP (reference implementation):** Runs on the same machine or a dedicated LAN
+node. Managed manually. Suitable for Simple and Standard deployments. No external
+dependencies.
 
-`cost_control.sh` is sourced by `masterarcade.sh`. Three functions, all passive observers.
+**Self-hosted with reverse proxy:** Expose a local FastMCP instance externally via
+Cloudflare Tunnel, ngrok, or a standard reverse proxy. Enables remote agent access without
+a hosted service. Scope credentials carefully.
 
-### check_openrouter_balance
+**Third-party hosted MCP platforms:** Services such as mcp.run, Smithery, and similar
+platforms host MCP servers without self-managed infrastructure. Review tool scoping and
+credential handling carefully — hosted MCP servers have access to whatever credentials you
+provide.
 
-Queries the OpenRouter API before any paid chunk. If balance is at or below your threshold, halts with a clear message.
-
-```bash
-check_openrouter_balance() {
-  BALANCE=$(curl -s https://openrouter.ai/api/v1/auth/key \
-    -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('limit_remaining', 999))")
-  if python3 -c "exit(0 if float('${BALANCE}') > ${OPENROUTER_HALT_THRESHOLD:-2.0} else 1)"; then
-    return 0
-  fi
-  echo "HALT: OpenRouter balance \$${BALANCE} at or below \$${OPENROUTER_HALT_THRESHOLD:-2.0} threshold"
-  echo "Autofill will add credits automatically, or add credits manually and run --resume"
-  exit 1
-}
-```
-
-### watch_oauth_limit
-
-Tails the Claude Code transcript in background. Signals restart on rate limit pattern.
-
-```bash
-watch_oauth_limit() {
-  local transcript_dir="$HOME/.claude/projects/$(echo $PROJECT_PATH | tr '/' '-')"
-  local transcript=$(ls -t "$transcript_dir"/*.jsonl 2>/dev/null | head -1)
-  [ -z "$transcript" ] && return
-  tail -f "$transcript" 2>/dev/null | while read line; do
-    if echo "$line" | grep -q "rate_limit_error\|overloaded_error"; then
-      echo "OAuth rate limit hit — signaling restart via LiteLLM"
-      kill -USR1 $MASTERARCADE_PID 2>/dev/null
-      break
-    fi
-  done &
-}
-```
-
-### report_chunk_cost
-
-Reads LiteLLM spend logs after each chunk and appends to run-log.md.
-
-```bash
-report_chunk_cost() {
-  local cost=0
-  if [ -n "$LITELLM_URL" ] && [ -n "$LITELLM_MASTER_KEY" ]; then
-    cost=$(curl -s "$LITELLM_URL/spend/logs?limit=10" \
-      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-      | python3 -c "import sys,json; logs=json.load(sys.stdin).get('data',[]); print(sum(l.get('spend',0) for l in logs[:5]))" 2>/dev/null || echo 0)
-  fi
-  echo "## Chunk $CHUNK_INDEX — $(date '+%Y-%m-%d %H:%M') — $CHUNK_STATUS" >> "$STATE_DIR/run-log.md"
-  echo "mode: $ARCADE_MODE | cost: \$$cost" >> "$STATE_DIR/run-log.md"
-  echo "" >> "$STATE_DIR/run-log.md"
-}
-```
+**Project backlog:** Automated FastMCP deployment (playbook or container) is not currently
+implemented. Deployment is manual. Contributions welcome.
 
 ---
 
-## Persistent state on a NAS or shared drive
+## Persistent state on a shared drive
 
-By default ARCADE uses `~/.arcade/projects/`. For resilience across machine rebuilds, point it at a NAS mount or shared directory:
+By default ARCADE uses `~/.arcade/projects/`. For resilience across machine rebuilds,
+point it at a shared directory:
 
 ```bash
-# In .env
-ARCADE_STATE_ROOT=/mnt/nas/arcade/projects
+# In arcade.conf
+ARCADE_STATE_ROOT="/mnt/shared/arcade/projects"
 ```
 
-`masterarcade.sh` uses `$ARCADE_STATE_ROOT` if set, otherwise `~/.arcade/projects`.
+State is also synced to the `arcade-{project}` GitHub repo on every chunk completion,
+so it is recoverable even without the shared volume.
 
-State is also synced to the `arcade-{project}` Git repo on every chunk completion, so it's recoverable even without NAS access.
+---
+
+## Distributed Architecture
+
+The diagram below shows a full Distributed deployment. Simple deployments omit everything
+to the left of `masterarcade.sh` and use a single API backend. Standard deployments add
+LiteLLM and local inference but retain single-node operation.
+
+```mermaid
+graph TD
+    A[Human / Agent Operator] --> B[MCP Hub\nFastMCP server]
+    B --> C[masterarcade.sh\nlocal machine]
+    C --> D{Chunk classifier}
+    D -->|REASONING / OAUTH| E[Claude Code CLI]
+    D -->|SCAFFOLD| F[OpenHands\nor equivalent]
+    E --> G{Inference backend}
+    G -->|OAuth| H[Claude Max\nsubscription]
+    G -->|API| I[OpenRouter /\nAnthropic direct]
+    G -->|Local proxy| J[LiteLLM proxy]
+    J --> K[Local inference\nOllama + models]
+    F --> J
+    E --> L[Calx\nbehavioral observer]
+    L -.->|corrections| E
+    E --> M[Feedback gate]
+    F --> M
+    M -->|pass| N[GitHub\nstate repos]
+    M -->|fail| O[Revision agent\nfast local model]
+    O --> C
+    N --> P[Cost + Calx\nmetrics log]
+    B --> P
+
+    style H fill:#e8f5e9
+    style I fill:#fff3e0
+    style K fill:#e3f2fd
+    style L fill:#f3e5f5
+    style P fill:#fce4ec
+```
+
+_Dashed line indicates Calx correction flow. In Simple deployments, the MCP hub, LiteLLM
+proxy, and local inference nodes are absent — Claude Code connects directly to the API
+backend._

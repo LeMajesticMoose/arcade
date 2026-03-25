@@ -13,7 +13,7 @@ evaluate_gate() {
   [ -f "$transcript" ] || { echo "FAIL"; return; }
 
   # Gauntlet mode: mechanically fail first 2 passes regardless of output
-  if echo "$chunk" | grep -qi "\[GAUNTLET\]"; then
+  if echo "$chunk" | grep -qi "\[CI-GATE-TEST\]"; then
     local rev_count="${ARCADE_REVISION_COUNT:-0}"
     if [ "$rev_count" -lt 2 ]; then
       echo "FAIL"

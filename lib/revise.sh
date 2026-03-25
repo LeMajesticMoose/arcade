@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # lib/revise.sh — Chunk revision on gate failure
 # Sourced by masterarcade.sh
-# Calls Lumina to decide: SPLIT | REDUCE | HALT
+# Calls a fast local model to decide: SPLIT, REDUCE, or HALT
 
 LUMINA_URL="${LUMINA_URL:-${ANTHROPIC_BASE_URL:-http://localhost:4000}}"
 LUMINA_MODEL="${LUMINA_MODEL:-agent-lite}"
@@ -129,7 +129,7 @@ _apply_split() {
 
   log "Applying SPLIT: breaking chunk into smaller pieces"
 
-  # Generate sub-chunks via Lumina if possible
+  # Generate sub-chunks via fast model if possible
   local sub_chunks
   sub_chunks=$(_split_via_lumina "$chunk") || {
     # Fallback: mechanical split into two halves

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/classify.sh — Chunk classification via Lumina (agent-lite) model
+# lib/classify.sh — Chunk classification via configured local model or heuristics
 # Sourced by masterarcade.sh
 # Output: REASONING or SCAFFOLD
 
@@ -16,7 +16,7 @@ classify_chunk() {
   local chunk="$1"
   [ -n "$chunk" ] || { echo "REASONING"; return; }
 
-  # Try Lumina first (if LITELLM_MASTER_KEY set or LUMINA_URL reachable)
+  # Try configured local model first (if LITELLM_MASTER_KEY or OPENROUTER_API_KEY set)
   if _classify_via_lumina "$chunk"; then
     return
   fi
