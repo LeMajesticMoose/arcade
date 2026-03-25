@@ -78,6 +78,17 @@ Chunks are the unit of work in ARCADE — one chunk equals one Claude Code sessi
 
 ---
 
+## Real-world example
+
+> "The total spend to build ARCADE itself — the entire orchestration system,
+> Calx integration, public release, and this documentation — was $20 in
+> OpenRouter API charges and $20 for a Claude Pro subscription.
+> $40 to build the tool that makes $40 sessions the norm rather than the exception."
+>
+> — Author, March 2026
+
+---
+
 Add type hints to `queue.md` for explicit control. Unlabelled chunks are auto-classified:
 
 ```markdown
