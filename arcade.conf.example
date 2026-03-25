@@ -1,0 +1,46 @@
+# ARCADE Configuration
+# Copy to arcade.conf and fill in your values.
+# arcade.conf is gitignored — never commit it.
+
+# ── Inference backend ─────────────────────────────────────────────────────────
+# Option A: Local LiteLLM proxy
+#   ANTHROPIC_BASE_URL="http://your-litellm-host:4000"
+# Option B: OpenRouter
+#   ANTHROPIC_BASE_URL="https://openrouter.ai/api/v1"
+# Option C: Anthropic direct
+#   ANTHROPIC_BASE_URL="https://api.anthropic.com"
+
+ANTHROPIC_BASE_URL="http://YOUR_LITELLM_HOST:4000"
+ANTHROPIC_API_KEY="your-anthropic-or-litellm-key-here"
+
+# ── OpenRouter (for balance checks and direct OpenRouter routing) ─────────────
+# Leave blank if not using OpenRouter.
+OPENROUTER_API_KEY=""
+
+# ── LiteLLM spend logging (for cost= field in run-log) ───────────────────────
+# Leave blank if not using LiteLLM, or if LiteLLM has no master key.
+LITELLM_MASTER_KEY=""
+LITELLM_URL="http://YOUR_LITELLM_HOST:4000"
+
+# ── Gitea (for state repo management) ────────────────────────────────────────
+# If you are not using Gitea, leave these blank.
+# The loop still works locally without Gitea — state is only pushed to Gitea
+# after each chunk if GITEA_TOKEN is set.
+GITEA_URL="https://your-gitea-instance"
+GITEA_TOKEN=""
+GITEA_ORG="your-org"
+
+# ── State storage root ────────────────────────────────────────────────────────
+# Local directory or NFS/TrueNAS mount. Must be writable by the user running ARCADE.
+ARCADE_STATE_ROOT="${HOME}/.arcade/projects"
+
+# ── Cost limits ───────────────────────────────────────────────────────────────
+ARCADE_MAX_BUDGET_USD="5.00"
+ARCADE_MIN_BALANCE_USD="1.00"
+
+# ── Loop settings ─────────────────────────────────────────────────────────────
+MAX_ITERATIONS="3"
+
+# ── Calx (optional) ──────────────────────────────────────────────────────────
+# Path to the Python venv containing getcalx. Leave blank to disable Calx.
+# CALX_VENV="/home/you/.calx-venv"

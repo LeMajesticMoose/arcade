@@ -1,0 +1,16 @@
+# Configuration — never commit credentials
+arcade.conf
+
+# Calx local state (corrections log and health state are machine-local)
+.calx/corrections.jsonl
+.calx/health/
+
+# Claude Code session state
+.claude/
+.last_transcript.txt
+.oauth_rate_limit
+
+# Editor and OS
+.DS_Store
+*.swp
+*~
