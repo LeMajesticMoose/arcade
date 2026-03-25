@@ -1,32 +1,40 @@
 #!/usr/bin/env bash
-# setup.sh — ARCADE quickstart for claw-ecosystem deployments
-# Detects your environment, walks through backend selection, writes arcade.conf
+# ARCADE setup — curl-pipe bootstrap installer
+# Usage: bash -c "$(curl -fsSL https://raw.githubusercontent.com/LeMajesticMoose/arcade/main/setup.sh)"
 set -euo pipefail
 
-ARCADE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF_FILE="$ARCADE_ROOT/arcade.conf"
-CONF_EXAMPLE="$ARCADE_ROOT/arcade.conf.example"
+ARCADE_SETUP_VERSION="1.0.0"
+ARCADE_REPO="https://github.com/LeMajesticMoose/arcade"
+ARCADE_RAW="https://raw.githubusercontent.com/LeMajesticMoose/arcade/main"
 
-# ── colour helpers ─────────────────────────────────────────────────────────────
+# ── colors ────────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-RED='\033[0;31m'
+CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m'
+RESET='\033[0m'
 
-ok()   { printf "  ${GREEN}[OK]${NC}  %s\n" "$1"; }
-miss() { printf "  ${YELLOW}[--]${NC}  %s  ${YELLOW}(not found)${NC}\n" "$1"; }
-err()  { printf "  ${RED}[!!]${NC}  %s  ${RED}(required — see below)${NC}\n" "$1"; }
-info() { printf "  ${BOLD}%s${NC}\n" "$1"; }
+ok()   { echo -e "  ${GREEN}\xE2\x9C\x93${RESET}  $*"; }
+miss() { echo -e "  ${YELLOW}\xe2\x80\x93${RESET}  $*"; }
+fail() { echo -e "  ${RED}\xE2\x9C\x97${RESET}  $*"; }
+hdr()  { echo ""; echo -e "${BOLD}── $* ──────────────────────────────────────────────${RESET}"; echo ""; }
+
+die() {
+  echo ""
+  echo -e "${RED}${BOLD}Error:${RESET} $*"
+  echo ""
+  exit 1
+}
 
 ask() {
   local prompt="$1" default="${2:-}"
   local result
-  if [ -n "$default" ]; then
-    read -rp "  $prompt [$default]: " result
+  if [[ -n "$default" ]]; then
+    read -rp "  ${prompt} [${default}]: " result
     echo "${result:-$default}"
   else
-    read -rp "  $prompt: " result
+    read -rp "  ${prompt}: " result
     echo "$result"
   fi
 }
@@ -34,334 +42,627 @@ ask() {
 ask_yn() {
   local prompt="$1" default="${2:-n}"
   local result
-  read -rp "  $prompt [y/N]: " result
+  read -rp "  ${prompt} [y/N]: " result
   result="${result:-$default}"
   [[ "$result" =~ ^[Yy]$ ]]
 }
 
-# ── banner ────────────────────────────────────────────────────────────────────
+# ── stage 0: bootstrap check ─────────────────────────────────────────────────
+
+missing_bootstrap=0
+for tool in bash git curl python3; do
+  if ! command -v "$tool" &>/dev/null; then
+    echo "Missing required tool: $tool"
+    missing_bootstrap=$((missing_bootstrap + 1))
+  fi
+done
+
+if [[ "$missing_bootstrap" -gt 0 ]]; then
+  echo ""
+  echo "Install missing tools, then re-run this script."
+  echo ""
+  echo "  Ubuntu/Debian:  sudo apt install git curl python3"
+  echo "  macOS:          brew install git curl python3"
+  echo "  Fedora/RHEL:    sudo dnf install git curl python3"
+  echo ""
+  exit 1
+fi
+
+# ── stage 1: welcome ─────────────────────────────────────────────────────────
+
 echo ""
-echo "${BOLD}ARCADE setup${NC}"
-echo "────────────────────────────────────────────────"
+echo -e "${BOLD}ARCADE — Autonomous Reasoning and Coding Execution${RESET}"
+echo "Setup v${ARCADE_SETUP_VERSION}"
+echo ""
+echo "This script will:"
+echo "  1. Check your environment"
+echo "  2. Clone ARCADE to a directory you choose"
+echo "  3. Configure your inference backend"
+echo "  4. Install optional components"
+echo "  5. Run a smoketest to verify everything works"
+echo "  6. Show you how to start your first real project"
+echo ""
+read -rp "Press Enter to continue or Ctrl+C to exit." _discard
 echo ""
 
-# ── section 1: environment detection ─────────────────────────────────────────
-echo "${BOLD}Checking required tools...${NC}"
+# ── stage 2: dependency check ─────────────────────────────────────────────────
 
-missing_required=0
+hdr "Dependencies"
 
 # Required tools
-for tool in claude python3 pip git curl; do
+req_missing=0
+for tool in git curl python3; do
   if command -v "$tool" &>/dev/null; then
     ok "$tool"
   else
-    err "$tool"
-    missing_required=$((missing_required + 1))
+    fail "$tool   required"
+    req_missing=$((req_missing + 1))
   fi
 done
 
+# pip
+pip_cmd=""
+if command -v pip3 &>/dev/null; then
+  ok "pip3"
+  pip_cmd="pip3"
+elif command -v pip &>/dev/null; then
+  ok "pip"
+  pip_cmd="pip"
+else
+  fail "pip   required for Calx install"
+  req_missing=$((req_missing + 1))
+fi
+
+if [[ "$req_missing" -gt 0 ]]; then
+  echo ""
+  echo -e "${RED}${BOLD}Required tools are missing. Install them and re-run.${RESET}"
+  echo ""
+  echo "  Ubuntu/Debian:  sudo apt install git curl python3 python3-pip"
+  echo "  macOS:          brew install git curl python3"
+  echo "  Fedora/RHEL:    sudo dnf install git curl python3 python3-pip"
+  echo ""
+  exit 1
+fi
+
+# Claude Code CLI
 echo ""
-echo "${BOLD}Checking agent ecosystem...${NC}"
-
-# Agent ecosystem — detect if present, not required
-for tool in ironclaw; do
-  if command -v "$tool" &>/dev/null; then
-    ok "$tool  (agent control available)"
-  else
-    miss "$tool"
+claude_ok=false
+if command -v claude &>/dev/null; then
+  ok "claude   Claude Code CLI"
+  claude_ok=true
+else
+  fail "claude   Claude Code CLI — required to run loops"
+  echo ""
+  echo "  Install Claude Code CLI before running ARCADE loops:"
+  echo "  https://docs.anthropic.com/en/docs/claude-code"
+  echo "  (npm install -g @anthropic-ai/claude-code)"
+  echo ""
+  if ! ask_yn "Continue setup anyway? Loops will not run until Claude Code is installed."; then
+    echo ""
+    echo "Run setup again after installing Claude Code CLI."
+    exit 0
   fi
-done
+  echo ""
+  miss "claude   continuing without Claude Code (install before running loops)"
+fi
 
-# Check for MCP server on localhost common ports
-mcp_found=false
-for port in 8000 8080 3000; do
-  if curl -sf --max-time 2 "http://localhost:$port/" &>/dev/null; then
-    ok "MCP server  (detected on localhost:$port)"
-    mcp_found=true
+# Optional: local inference stack
+echo ""
+ollama_ok=false
+if command -v ollama &>/dev/null || curl -sf --max-time 2 "http://localhost:11434/api/tags" &>/dev/null; then
+  ok "ollama   local inference available"
+  ollama_ok=true
+else
+  miss "ollama   not detected"
+fi
+
+litellm_ok=false
+if curl -sf --max-time 2 "http://localhost:4000/health" &>/dev/null; then
+  ok "litellm  proxy detected on localhost:4000"
+  litellm_ok=true
+else
+  miss "litellm  not detected on localhost:4000"
+fi
+
+mcp_ok=false
+if curl -sf --max-time 2 "http://localhost:8000/" &>/dev/null; then
+  ok "mcp      server detected on localhost:8000"
+  mcp_ok=true
+else
+  miss "mcp      not detected on localhost:8000"
+fi
+
+ironclaw_ok=false
+if command -v ironclaw &>/dev/null; then
+  ok "ironclaw"
+  ironclaw_ok=true
+else
+  miss "ironclaw not found"
+fi
+
+# Optional: Calx
+echo ""
+calx_ok=false
+calx_venv_found=""
+for candidate in \
+    "$(command -v calx 2>/dev/null || true)" \
+    "$(command -v getcalx 2>/dev/null || true)" \
+    "${HOME}/.calx-venv/bin/calx" \
+    "${HOME}/.local/bin/calx"; do
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    calx_ok=true
+    if [[ "$candidate" == *"/.calx-venv/bin/calx" ]]; then
+      calx_venv_found="${HOME}/.calx-venv"
+    fi
     break
   fi
 done
-if ! $mcp_found; then
-  miss "MCP server  (not detected on localhost)"
+
+if $calx_ok; then
+  ok "calx     behavioral correction installed"
+else
+  miss "calx     not found — will offer install"
 fi
 
+# Summary
 echo ""
-echo "${BOLD}Checking local inference stack...${NC}"
-
-# Ollama
-if command -v ollama &>/dev/null; then
-  ok "ollama"
-elif curl -sf --max-time 2 "http://localhost:11434/" &>/dev/null; then
-  ok "ollama  (running on localhost:11434)"
+echo -e "  ${BOLD}Summary${RESET}"
+echo -e "  Required tools:  ${GREEN}OK${RESET}"
+if $claude_ok; then
+  echo -e "  Claude Code:     ${GREEN}OK${RESET}"
 else
-  miss "ollama"
+  echo -e "  Claude Code:     ${RED}NOT FOUND${RESET}  (loops will not run until installed)"
 fi
-
-# LiteLLM — check if port 4000 is listening
-if curl -sf --max-time 2 "http://localhost:4000/" &>/dev/null; then
-  ok "litellm  (detected on localhost:4000)"
+if $calx_ok; then
+  echo -e "  Calx:            ${GREEN}found${RESET}"
 else
-  miss "litellm  (not detected on localhost:4000)"
+  echo -e "  Calx:            ${YELLOW}not found${RESET}  (will offer install)"
 fi
+_ollama_s="$( $ollama_ok  && echo "ollama OK"   || echo "ollama not found")"
+_litellm_s="$($litellm_ok && echo "litellm OK"  || echo "litellm not found")"
+_mcp_s="$(    $mcp_ok     && echo "MCP OK"      || echo "MCP not found")"
+echo "  Local stack:     ${_ollama_s} / ${_litellm_s} / ${_mcp_s}"
 
-# FastMCP — check if mcp package or fastmcp is available
-if python3 -c "import fastmcp" &>/dev/null 2>&1; then
-  ok "fastmcp  (Python package available)"
-else
-  miss "fastmcp  (pip install fastmcp to enable MCP server)"
-fi
+# ── stage 3: install directory ────────────────────────────────────────────────
 
+hdr "Install directory"
+
+echo "Where should ARCADE be installed?"
 echo ""
-echo "${BOLD}Checking Calx...${NC}"
+raw_install_dir="$(ask "Install path" "${HOME}/arcade")"
+INSTALL_DIR="${raw_install_dir/#\~/${HOME}}"
 
-calx_found=false
-calx_venv=""
-
-# Check PATH
-if command -v calx &>/dev/null; then
-  calx_version=$(calx --version 2>/dev/null || echo "unknown")
-  ok "calx  ($calx_version)"
-  calx_found=true
-else
-  # Check common venv locations
-  for venv_path in "$HOME/.calx-venv" "$HOME/.local/share/calx-venv" "$ARCADE_ROOT/.calx-venv"; do
-    if [ -x "$venv_path/bin/calx" ]; then
-      calx_version=$("$venv_path/bin/calx" --version 2>/dev/null || echo "unknown")
-      ok "calx  ($calx_version — found at $venv_path)"
-      calx_found=true
-      calx_venv="$venv_path"
-      break
-    fi
-  done
-  if ! $calx_found; then
-    miss "calx  (pip install getcalx)"
-  fi
+parent_dir="$(dirname "$INSTALL_DIR")"
+if [[ ! -d "$parent_dir" ]]; then
+  die "Parent directory does not exist: $parent_dir"
+fi
+if [[ ! -w "$parent_dir" ]]; then
+  die "Parent directory is not writable: $parent_dir"
 fi
 
-echo ""
-
-# Bail if required tools are missing
-if [ "$missing_required" -gt 0 ]; then
-  echo "${RED}${BOLD}Required tools missing. Please install them before continuing:${NC}"
+if [[ -d "$INSTALL_DIR" ]]; then
   echo ""
-  [ ! "$(command -v claude)" ] && echo "  Claude Code CLI: npm install -g @anthropic-ai/claude-code"
-  [ ! "$(command -v python3)" ] && echo "  Python 3.10+:    see https://python.org"
-  [ ! "$(command -v pip)" ]    && echo "  pip:             comes with Python 3.10+"
-  [ ! "$(command -v git)" ]    && echo "  git:             apt/brew install git"
-  [ ! "$(command -v curl)" ]   && echo "  curl:            apt/brew install curl"
+  echo -e "  ${YELLOW}$INSTALL_DIR already exists.${RESET}"
   echo ""
-  exit 1
+  echo "  [1] Update existing install (git pull)"
+  echo "  [2] Fresh install (backup existing to ${INSTALL_DIR}.bak.$(date +%Y%m%d))"
+  echo "  [3] Exit"
+  echo ""
+  read -rp "  Choice [1]: " install_choice
+  install_choice="${install_choice:-1}"
+
+  case "$install_choice" in
+    1)
+      echo ""
+      (cd "$INSTALL_DIR" && git pull --ff-only 2>&1) && ok "updated $INSTALL_DIR" \
+        || die "git pull failed — check your network connection and try again."
+      ;;
+    2)
+      backup_path="${INSTALL_DIR}.bak.$(date +%Y%m%d)"
+      echo ""
+      mv "$INSTALL_DIR" "$backup_path" && ok "backed up to $backup_path"
+      echo ""
+      git clone "$ARCADE_REPO" "$INSTALL_DIR" 2>&1 && ok "cloned to $INSTALL_DIR" \
+        || die "git clone failed — check your network connection and try again."
+      ;;
+    3)
+      echo ""
+      echo "Exiting. Run setup again when ready."
+      exit 0
+      ;;
+    *)
+      die "Invalid choice."
+      ;;
+  esac
+else
+  echo ""
+  git clone "$ARCADE_REPO" "$INSTALL_DIR" 2>&1 && ok "cloned to $INSTALL_DIR" \
+    || die "git clone failed — check your network connection and try again."
 fi
 
-# ── section 2: install missing optional tools ─────────────────────────────────
-if ! $calx_found; then
-  echo "${BOLD}Optional: Calx (behavioral correction for Claude Code)${NC}"
-  echo "  Calx injects behavioral rules at session start and corrects drift mid-session."
-  echo "  Author: Spencer Hardwick — https://github.com/getcalx/oss"
-  echo ""
-  if ask_yn "Install Calx now? (pip install getcalx)"; then
-    echo ""
-    # Try user install first, fall back to venv
-    if pip install --user getcalx 2>/dev/null; then
-      calx_found=true
-      echo "  Calx installed to user packages."
-    else
-      echo "  User install failed — creating venv at ~/.calx-venv"
-      python3 -m venv "$HOME/.calx-venv"
-      "$HOME/.calx-venv/bin/pip" install getcalx
-      calx_found=true
-      calx_venv="$HOME/.calx-venv"
-      echo "  Calx installed to $HOME/.calx-venv"
-    fi
-  fi
-fi
+# ── stage 4: inference backend ────────────────────────────────────────────────
 
-echo ""
+hdr "Inference backend"
 
-# ── section 3: backend selection ─────────────────────────────────────────────
-echo "${BOLD}Select your inference backend:${NC}"
+echo "How will ARCADE connect to Claude?"
 echo ""
-echo "  1) Claude Max subscription (OAuth)  — subscription billing, no API key required"
-echo "  2) OpenRouter API                   — pay per token, multi-model access"
-echo "  3) Anthropic API direct             — pay per token, Claude only"
-echo "  4) Local LiteLLM proxy              — self-hosted, mixed local/API routing"
+echo "  [1] Claude Max subscription (OAuth)"
+echo "      Use your Anthropic subscription — billed to your plan, not per token"
+echo "      Best for: heavy development sessions, users with active Claude Max"
 echo ""
-read -rp "  Enter 1-4: " backend_choice
+echo "  [2] OpenRouter API"
+echo "      Pay per token via openrouter.ai — access to Claude and other models"
+echo "      Best for: API users, occasional use, multi-model access"
+echo ""
+echo "  [3] Anthropic API direct"
+echo "      Pay per token directly with Anthropic"
+echo "      Best for: simple setup, Claude-only users"
+echo ""
+echo "  [4] Local LiteLLM proxy"
+echo "      Self-hosted proxy mixing local and API models"
+echo "      Best for: distributed setups, users with local inference hardware"
+echo "      Requires: LiteLLM running at a reachable address"
+echo ""
+read -rp "  Choice [1]: " backend_choice
+backend_choice="${backend_choice:-1}"
 
-backend_url=""
-backend_key=""
-openrouter_key=""
-litellm_key=""
-litellm_url=""
+ANTHROPIC_BASE_URL=""
+ANTHROPIC_API_KEY=""
+OPENROUTER_API_KEY=""
+LITELLM_MASTER_KEY=""
+INFERENCE_MODE="oauth"
 
 case "$backend_choice" in
   1)
+    ANTHROPIC_BASE_URL=""
+    ANTHROPIC_API_KEY=""
+    INFERENCE_MODE="oauth"
     echo ""
-    info "OAuth mode: Claude Code will authenticate using your Anthropic account."
-    info "No API key required. Billing comes from your Claude Max subscription."
-    backend_url="https://api.anthropic.com"
-    backend_key=""
+    ok "OAuth mode selected — billing via Claude Max subscription"
+    if command -v claude &>/dev/null; then
+      echo ""
+      if claude auth status 2>/dev/null | grep -qi "logged in"; then
+        ok "claude auth   logged in"
+      else
+        miss "claude auth   run 'claude auth login' before running loops"
+      fi
+    fi
     ;;
   2)
+    INFERENCE_MODE="api"
+    ANTHROPIC_BASE_URL="https://openrouter.ai/api/v1"
     echo ""
-    info "OpenRouter: pay per token, access to many models via one key."
-    info "Get your key at: https://openrouter.ai/keys"
-    echo ""
-    backend_url="https://openrouter.ai/api/v1"
-    openrouter_key=$(ask "OpenRouter API key (sk-or-...)")
-    backend_key="$openrouter_key"
+    echo "  Your OpenRouter API key (input hidden):"
+    while true; do
+      read -rsp "  Key: " raw_key
+      echo ""
+      if [[ "$raw_key" == sk-or-* ]]; then
+        ANTHROPIC_API_KEY="$raw_key"
+        OPENROUTER_API_KEY="$raw_key"
+        ok "key accepted"
+        break
+      else
+        echo -e "  ${YELLOW}Key should start with sk-or- — try again or Ctrl+C to exit${RESET}"
+      fi
+    done
     ;;
   3)
+    INFERENCE_MODE="api"
+    ANTHROPIC_BASE_URL="https://api.anthropic.com"
     echo ""
-    info "Anthropic direct: pay per token, Claude models only."
-    info "Get your key at: https://console.anthropic.com/keys"
-    echo ""
-    backend_url="https://api.anthropic.com"
-    backend_key=$(ask "Anthropic API key (sk-ant-...)")
+    echo "  Your Anthropic API key (input hidden):"
+    while true; do
+      read -rsp "  Key: " raw_key
+      echo ""
+      if [[ "$raw_key" == sk-ant-* ]]; then
+        ANTHROPIC_API_KEY="$raw_key"
+        ok "key accepted"
+        break
+      else
+        echo -e "  ${YELLOW}Key should start with sk-ant- — try again or Ctrl+C to exit${RESET}"
+      fi
+    done
     ;;
   4)
+    INFERENCE_MODE="api"
     echo ""
-    info "Local LiteLLM: self-hosted proxy, mixed local/API routing."
-    info "See ADVANCED.md for LiteLLM configuration."
+    raw_litellm_url="$(ask "LiteLLM proxy URL" "http://localhost:4000")"
+    ANTHROPIC_BASE_URL="$raw_litellm_url"
     echo ""
-    backend_url=$(ask "LiteLLM base URL" "http://localhost:4000")
-    backend_key=$(ask "LiteLLM master key")
-    litellm_key="$backend_key"
-    litellm_url="$backend_url"
+    if curl -sf --max-time 5 "${ANTHROPIC_BASE_URL}/health" &>/dev/null; then
+      ok "LiteLLM reachable at $ANTHROPIC_BASE_URL"
+    else
+      miss "LiteLLM not responding at $ANTHROPIC_BASE_URL — check proxy before running loops"
+    fi
+    echo ""
+    echo "  LiteLLM master key for spend logging (input hidden, press Enter to skip):"
+    read -rsp "  Key: " LITELLM_MASTER_KEY || true
+    echo ""
+    if [[ -n "${LITELLM_MASTER_KEY}" ]]; then
+      ok "LiteLLM key accepted"
+    else
+      miss "LiteLLM key not set — cost= field will show \$0.0000 in run-log"
+    fi
     ;;
   *)
-    echo "${RED}Invalid selection.${NC}"
-    exit 1
+    die "Invalid backend choice."
     ;;
 esac
 
+# ── stage 5: state directory ──────────────────────────────────────────────────
+
+hdr "Project state"
+
+echo "ARCADE stores project queues, run logs, and context files in a"
+echo "persistent directory. This should survive reboots — avoid /tmp."
 echo ""
+raw_state_root="$(ask "State directory" "${HOME}/.arcade/projects")"
+STATE_ROOT="${raw_state_root/#\~/${HOME}}"
 
-# ── section 4: state storage ─────────────────────────────────────────────────
-echo "${BOLD}State storage location${NC}"
-echo "  ARCADE writes queue state, run logs, and issues here."
-echo "  Local disk recommended. NFS works if writable."
-echo ""
-state_root=$(ask "State root directory" "$HOME/.arcade/projects")
+mkdir -p "$STATE_ROOT"
 
-# Validate/create
-if [ ! -d "$state_root" ]; then
-  echo "  Creating $state_root..."
-  mkdir -p "$state_root"
-fi
-
-# Test write permissions
-test_file="$state_root/.arcade_write_test_$$"
-if touch "$test_file" 2>/dev/null; then
-  rm -f "$test_file"
-  ok "State directory writable: $state_root"
+_test_file="${STATE_ROOT}/.arcade_write_test_$$"
+if touch "$_test_file" 2>/dev/null; then
+  rm -f "$_test_file"
+  ok "state directory writable: $STATE_ROOT"
 else
-  echo "${RED}Cannot write to $state_root — check permissions.${NC}"
-  exit 1
+  die "Cannot write to $STATE_ROOT — check permissions."
 fi
 
-# Warn on NFS-like paths
-if [[ "$state_root" == /mnt/* ]] || [[ "$state_root" == /nfs/* ]]; then
+if [[ "$STATE_ROOT" == /mnt/* || "$STATE_ROOT" == /nfs/* ]]; then
   echo ""
-  echo "${YELLOW}  Note: NFS/remote paths can cause issues with sed queue operations."
-  echo "  If you see queue corruption, switch to a local path.${NC}"
-fi
-
-echo ""
-
-# ── section 5: github integration ────────────────────────────────────────────
-echo "${BOLD}GitHub integration (optional)${NC}"
-echo "  ARCADE can push run-log.md and queue.md to a GitHub state repo after each chunk."
-echo "  Requires a classic personal access token with 'repo' scope."
-echo ""
-github_url=""
-github_token=""
-github_org=""
-
-if ask_yn "Configure GitHub integration?"; then
-  github_url="https://api.github.com"
-  github_org=$(ask "GitHub username or org")
-  github_token=$(ask "GitHub personal access token (classic, repo scope)")
-fi
-
-echo ""
-
-# ── section 6: write arcade.conf ─────────────────────────────────────────────
-echo "${BOLD}Writing arcade.conf${NC}"
-
-if [ -f "$CONF_FILE" ]; then
+  echo -e "  ${YELLOW}NFS/remote paths can cause issues with file operations."
+  echo -e "  A local path is recommended.${RESET}"
   echo ""
-  if ! ask_yn "arcade.conf already exists. Overwrite?"; then
-    echo "  Skipping — keeping existing arcade.conf."
-    echo ""
-  else
-    write_conf=true
+  if ! ask_yn "Continue with this path anyway?"; then
+    raw_state_root="$(ask "State directory" "${HOME}/.arcade/projects")"
+    STATE_ROOT="${raw_state_root/#\~/${HOME}}"
+    mkdir -p "$STATE_ROOT"
   fi
-else
-  write_conf=true
 fi
 
-if [ "${write_conf:-false}" = "true" ]; then
-  cat > "$CONF_FILE" << CONFEOF
-# ARCADE Configuration — generated by setup.sh
-# arcade.conf is gitignored — never commit it.
+# ── stage 6: optional components ─────────────────────────────────────────────
+
+hdr "Calx — behavioral correction"
+
+echo "Calx observes Claude Code sessions and corrects behavioral drift."
+echo "Without it the loop works, but long autonomous runs may go off-spec."
+echo "Developed by Spencer Hardwick — github.com/getcalx/oss (MIT)"
+echo ""
+
+CALX_VENV="${calx_venv_found}"
+
+if $calx_ok; then
+  ok "Calx already installed"
+else
+  if ask_yn "Install Calx now?" "y"; then
+    echo ""
+    calx_install_ok=false
+
+    if $pip_cmd install getcalx --quiet --user 2>/dev/null; then
+      calx_install_ok=true
+      ok "Calx installed via ${pip_cmd} --user"
+    else
+      echo "  User install failed — trying venv at ${HOME}/.calx-venv..."
+      if python3 -m venv "${HOME}/.calx-venv" 2>/dev/null \
+         && "${HOME}/.calx-venv/bin/pip" install getcalx --quiet 2>/dev/null; then
+        calx_install_ok=true
+        CALX_VENV="${HOME}/.calx-venv"
+        ok "Calx installed in ${HOME}/.calx-venv"
+      fi
+    fi
+
+    if ! $calx_install_ok; then
+      miss "Calx install failed — install manually:"
+      echo ""
+      echo "    pip install getcalx"
+      echo "    # or: python3 -m venv ~/.calx-venv && ~/.calx-venv/bin/pip install getcalx"
+      echo ""
+      echo "  Then set CALX_VENV in ${INSTALL_DIR}/arcade.conf"
+    fi
+  else
+    miss "Calx install skipped"
+  fi
+fi
+
+echo ""
+if ! curl -sf --max-time 2 "http://localhost:3000/" &>/dev/null; then
+  miss "OpenHands not detected"
+  echo "     SCAFFOLD chunks will fall back to direct Claude Code execution."
+  echo "     See ADVANCED.md for setup if you want delegated scaffolding."
+else
+  ok "OpenHands detected on localhost:3000"
+fi
+
+# ── stage 7: write arcade.conf ────────────────────────────────────────────────
+
+hdr "Writing configuration"
+
+CONF_FILE="${INSTALL_DIR}/arcade.conf"
+
+cat > "$CONF_FILE" << CONFEOF
+# ARCADE configuration — generated by setup.sh v${ARCADE_SETUP_VERSION}
+# Edit this file to change your configuration.
+# Do not commit this file to version control.
 
 # ── Inference backend ─────────────────────────────────────────────────────────
-ANTHROPIC_BASE_URL="${backend_url}"
-ANTHROPIC_API_KEY="${backend_key}"
+# ANTHROPIC_BASE_URL: inference endpoint
+#   Claude Max (OAuth): leave empty
+#   OpenRouter:         https://openrouter.ai/api/v1
+#   Anthropic direct:   https://api.anthropic.com
+#   LiteLLM proxy:      http://your-host:4000
+ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL}"
 
-# ── OpenRouter (for balance checks) ──────────────────────────────────────────
-OPENROUTER_API_KEY="${openrouter_key}"
+# ANTHROPIC_API_KEY: your API key (leave empty for OAuth mode)
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}"
+
+# INFERENCE_MODE: set during setup — informational only
+INFERENCE_MODE="${INFERENCE_MODE}"
+
+# ── OpenRouter balance monitoring ─────────────────────────────────────────────
+# Enables balance check before each paid chunk
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 
 # ── LiteLLM spend logging ─────────────────────────────────────────────────────
-LITELLM_MASTER_KEY="${litellm_key}"
-LITELLM_URL="${litellm_url}"
+# Enables the cost= field in run-log.md
+LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}"
+LITELLM_URL="${ANTHROPIC_BASE_URL}"
 
-# ── GitHub state repo management ─────────────────────────────────────────────
-GITHUB_URL="${github_url}"
-GITHUB_TOKEN="${github_token}"
-GITHUB_ORG="${github_org}"
-
-# ── State storage root ────────────────────────────────────────────────────────
-ARCADE_STATE_ROOT="${state_root}"
+# ── Project state ─────────────────────────────────────────────────────────────
+ARCADE_STATE_ROOT="${STATE_ROOT}"
 
 # ── Cost limits ───────────────────────────────────────────────────────────────
+# Halt if cumulative session spend exceeds this amount
 ARCADE_MAX_BUDGET_USD="5.00"
+# Halt before a paid chunk if OpenRouter balance is below this amount
 ARCADE_MIN_BALANCE_USD="1.00"
 
 # ── Loop settings ─────────────────────────────────────────────────────────────
 MAX_ITERATIONS="3"
 
-# ── Calx (optional) ──────────────────────────────────────────────────────────
-CALX_VENV="${calx_venv}"
+# ── GitHub state repo sync ────────────────────────────────────────────────────
+# Optional: pushes run-log.md and queue.md to a GitHub repo after each chunk
+GITHUB_TOKEN=""
+GITHUB_ORG=""
+GITHUB_URL="https://api.github.com"
+
+# ── Calx ─────────────────────────────────────────────────────────────────────
+# Path to Python venv containing getcalx, or empty to use system PATH
+CALX_VENV="${CALX_VENV}"
 CONFEOF
-  ok "arcade.conf written"
+
+ok "arcade.conf written to ${INSTALL_DIR}/arcade.conf"
+
+# ── stage 8: smoketest ────────────────────────────────────────────────────────
+
+hdr "Smoketest"
+
+echo "Run a single lightweight loop iteration to verify your setup?"
+echo "This will use your configured backend to complete one small task."
+echo ""
+echo "Note: OAuth and API modes will consume a small number of tokens."
+echo "      Local LiteLLM mode consumes no API tokens."
+echo ""
+
+smoketest_ok=false
+
+if ask_yn "Run smoketest?" "y"; then
+  smoketest_dir="${STATE_ROOT}/setup-smoketest"
+  mkdir -p "$smoketest_dir"
+
+  cat > "${smoketest_dir}/queue.md" << 'EOF'
+# Task Queue — setup-smoketest
+## Pending
+- [ ] [SCAFFOLD] Write a file called arcade_ready.txt containing the text "ARCADE is configured correctly"
+## In Progress
+## Complete
+EOF
+
+  cat > "${smoketest_dir}/CONTEXT.md" << 'EOF'
+# Context — setup-smoketest
+This is an automated setup verification task. Write the requested file and emit the completion promise.
+EOF
+
+  cat > "${smoketest_dir}/CLAUDE.md" << 'EOF'
+# Instructions — setup-smoketest
+Write the requested file exactly as specified. When done, emit: <promise>ITERATION_COMPLETE</promise>
+Do not ask questions. Complete the task and emit the promise.
+EOF
+
+  cat > "${smoketest_dir}/issues.md" << 'EOF'
+EOF
+
+  echo ""
+
+  if (cd "$INSTALL_DIR" && ./masterarcade.sh --project setup-smoketest 2>&1); then
+    if [[ -f "${smoketest_dir}/arcade_ready.txt" ]]; then
+      ok "smoketest passed — arcade_ready.txt created"
+      rm -f "${smoketest_dir}/arcade_ready.txt"
+      smoketest_ok=true
+    else
+      miss "loop completed but arcade_ready.txt was not found"
+      echo ""
+      echo "  Run-log:"
+      tail -5 "${smoketest_dir}/run-log.md" 2>/dev/null | sed 's/^/    /' || true
+    fi
+  else
+    miss "loop exited with an error"
+    echo ""
+    echo "  Run-log:"
+    tail -10 "${smoketest_dir}/run-log.md" 2>/dev/null | sed 's/^/    /' || true
+    echo ""
+    echo "  Common causes:"
+    echo "    - Claude Code not logged in  (run: claude auth login)"
+    echo "    - Invalid API key in arcade.conf"
+    echo "    - LiteLLM proxy unreachable"
+    echo ""
+    echo "  Fix the issue and re-run:"
+    echo "    cd ${INSTALL_DIR} && ./masterarcade.sh --project setup-smoketest"
+  fi
+else
+  miss "smoketest skipped"
 fi
 
+# ── stage 9: quick start guide ────────────────────────────────────────────────
+
+hdr "You're ready"
+
+echo "ARCADE is installed at: ${INSTALL_DIR}"
+echo "Configuration:          ${INSTALL_DIR}/arcade.conf"
+echo "Project state:          ${STATE_ROOT}"
 echo ""
 
-# ── section 7: summary ───────────────────────────────────────────────────────
-echo "${BOLD}Setup complete.${NC}"
+hdr "Starting a real project"
+
+echo "A project needs four files. Create them before running the loop:"
+echo ""
+echo "  queue.md      Ordered task list. One chunk = one loop run."
+echo "  CONTEXT.md    Project background and constraints for Claude to read."
+echo "  CLAUDE.md     Behavioral instructions: promise format, commit style."
+echo "  issues.md     Known problems to address (can be empty)."
+echo ""
+echo "Place them in:"
+echo "  ${INSTALL_DIR}/projects/my-project/"
+echo ""
+echo "Then run:"
+echo "  cd ${INSTALL_DIR}"
+echo "  ./masterarcade.sh --init --project my-project"
+echo "  ./masterarcade.sh --project my-project"
 echo ""
 
-echo "  Backend:     $([ "$backend_choice" = "1" ] && echo "Claude Max (OAuth)" || echo "$backend_url")"
-echo "  State root:  $state_root"
-echo "  Calx:        $(${calx_found} && echo "installed" || echo "not installed")"
-echo "  GitHub:      $([ -n "$github_org" ] && echo "$github_org" || echo "not configured")"
+hdr "Writing queue.md"
+
+echo "One chunk per line. Tag each with [REASONING], [SCAFFOLD], or [OAUTH]:"
 echo ""
-echo "  To start your first project:"
+echo "  - [ ] [REASONING] Design the data model and document decisions"
+echo "  - [ ] [SCAFFOLD] Generate project scaffold and directory structure"
+echo "  - [ ] [REASONING] Implement core logic and write tests"
+echo "  - [ ] [OAUTH] Heavy refactoring session — use subscription billing"
 echo ""
-echo "    mkdir -p projects/my-project"
-echo "    # place queue.md, CONTEXT.md, CLAUDE.md, issues.md in projects/my-project/"
+echo "Keep chunks small enough to complete in one session."
+echo "If a chunk fails repeatedly, ARCADE will split it automatically."
 echo ""
-echo "    ./masterarcade.sh --init --project my-project"
-echo "    ./masterarcade.sh --project my-project"
+
+hdr "Generating prep documents with AI"
+
+echo "You can use Claude (in claude.ai or via API) to generate your prep"
+echo "files. Describe your project and ask for:"
 echo ""
-echo "  To use Claude Max subscription billing:"
-echo "    ./masterarcade.sh --project my-project --mode oauth"
+echo '  "Generate queue.md, CONTEXT.md, and CLAUDE.md for this project'
+echo '   following the ARCADE format. The project is: [your description]"'
 echo ""
-echo "  Documentation:"
-echo "    README.md    — overview and chunk types"
-echo "    SETUP.md     — full configuration reference"
-echo "    ADVANCED.md  — LiteLLM, MCP, distributed setup"
+echo "See SETUP.md for a worked example and file templates."
+echo ""
+
+hdr "Commands"
+
+echo "  ./masterarcade.sh --status"
+echo "  ./masterarcade.sh --project NAME --status"
+echo "  ./masterarcade.sh --project NAME --add-task \"task description\""
+echo "  ./masterarcade.sh --project NAME --mode oauth"
+echo "  ./masterarcade.sh --project NAME --resume"
+echo ""
+echo "Full documentation: ${INSTALL_DIR}/README.md"
+echo "Setup reference:    ${INSTALL_DIR}/SETUP.md"
+echo "Advanced options:   ${INSTALL_DIR}/ADVANCED.md"
 echo ""

@@ -90,26 +90,34 @@ Add type hints to `queue.md` for explicit control. Unlabelled chunks are auto-cl
 
 ## Quick start
 
-See [SETUP.md](SETUP.md) for full configuration, the interactive setup script, and backend options.
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/LeMajesticMoose/arcade/main/setup.sh)"
+```
+
+The setup script checks your environment, clones ARCADE, walks through backend configuration, optionally installs Calx, and runs a smoketest. Requires `bash`, `git`, `curl`, and `python3`.
+
+**Manual setup** (if you prefer to configure by hand):
 
 ```bash
-# Run the interactive setup
-./setup.sh
-
-# Or configure manually
+git clone https://github.com/LeMajesticMoose/arcade ~/arcade
+cd ~/arcade
 cp arcade.conf.example arcade.conf
-# edit arcade.conf
+# edit arcade.conf — set ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ARCADE_STATE_ROOT
+```
 
-# Initialize a project
+See [SETUP.md](SETUP.md) for full configuration details and all four backend options.
+
+**Running the loop:**
+
+```bash
+cd ~/arcade
 ./masterarcade.sh --init --project my-project
-
-# Run the loop
 ./masterarcade.sh --project my-project
 
-# Use Claude Max subscription billing
+# Claude Max subscription billing
 ./masterarcade.sh --project my-project --mode oauth
 
-# Use cheaper model tier for scaffold-heavy projects
+# Cheaper model tier for scaffold-heavy projects
 ./masterarcade.sh --project my-project --mode scaffold
 ```
 
