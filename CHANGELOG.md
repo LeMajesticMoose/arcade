@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.3.0 — 2026-03-26
+
+### Added
+- **ASCII arcade cabinet header** — `print_header()` function prints an 11-line
+  ASCII cabinet side-by-side with a title/step panel at every stage transition
+- **Progress indicator** — each stage shows current step in brackets:
+  `deps > install > [backend] > state > calx > mcp > verify`
+- **`--step <name>` flag** — re-run any single stage without redoing the full
+  install; loads existing `arcade.conf` as defaults; valid steps:
+  `deps install backend state calx mcp verify summary`
+- **Structured summary screen** — replaces the quick-start text dump with a
+  concise configuration readout: backend, state root, calx path, MCP presence,
+  claude version; includes the `--step` re-run command for any stage
+
+### Changed
+- `setup.sh` version: `0.2.1` → `0.3.0`
+- All `hdr "..."` section dividers replaced with `print_header "step" "progress"`
+- Stage 9 (quick start guide) replaced with structured summary screen
+
 ## v0.2.1 — 2026-03-26
 
 ### Fixed

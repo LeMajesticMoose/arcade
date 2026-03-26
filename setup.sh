@@ -5,25 +5,36 @@
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/LeMajesticMoose/arcade/main/setup.sh)"
 #
 # Flags:
-#   --yes   Non-interactive mode. Skips all optional installs (Claude CLI, Calx,
-#           MCP server setup) and accepts all directory/backend defaults.
-#           Supply credentials via environment variables:
-#             ARCADE_BACKEND     1=OAuth 2=OpenRouter 3=Anthropic 4=LiteLLM (default: 1)
-#             ARCADE_API_KEY     API key for chosen backend
-#             ARCADE_STATE_ROOT  State directory (default: ~/.arcade/projects)
-#           Example:
-#             ARCADE_BACKEND=2 ARCADE_API_KEY=sk-or-... \
-#               bash -c "$(curl -fsSL .../setup.sh)" -- --yes
+#   --yes          Non-interactive mode. Skips all optional installs (Claude CLI,
+#                  Calx, MCP server setup) and accepts all directory/backend defaults.
+#                  Supply credentials via environment variables:
+#                    ARCADE_BACKEND     1=OAuth 2=OpenRouter 3=Anthropic 4=LiteLLM (default: 1)
+#                    ARCADE_API_KEY     API key for chosen backend
+#                    ARCADE_STATE_ROOT  State directory (default: ~/.arcade/projects)
+#                  Example:
+#                    ARCADE_BACKEND=2 ARCADE_API_KEY=sk-or-... \
+#                      bash -c "$(curl -fsSL .../setup.sh)" -- --yes
+#
+#   --step <name>  Re-run a single setup stage without redoing the full install.
+#                  Loads existing arcade.conf as defaults before running the stage.
+#                  Stage names: deps | install | backend | state | calx | mcp | verify | summary
+#                  Example:
+#                    bash setup.sh --step backend
 set -euo pipefail
 
-ARCADE_SETUP_VERSION="0.2.1"
+ARCADE_SETUP_VERSION="0.3.0"
 
-# ── --yes / non-interactive flag ──────────────────────────────────────────────
+# ── flag parsing ──────────────────────────────────────────────────────────────
 YES_MODE=false
+STEP_MODE=""
+_prev_arg=""
 for _arg in "$@"; do
   if [[ "$_arg" == "--yes" ]]; then
     YES_MODE=true
+  elif [[ "$_prev_arg" == "--step" ]]; then
+    STEP_MODE="$_arg"
   fi
+  _prev_arg="$_arg"
 done
 ARCADE_REPO="https://github.com/LeMajesticMoose/arcade"
 ARCADE_RAW="https://raw.githubusercontent.com/LeMajesticMoose/arcade/main"
@@ -77,6 +88,43 @@ ask_yn() {
   [[ "$result" =~ ^[Yy]$ ]]
 }
 
+# ── print_header <step_name> <progress_line> ──────────────────────────────────
+print_header() {
+  local step_name="$1" progress_line="$2"
+  local cabinet=(
+    "  /^^^^^^^^^^\\  "
+    "  |  +----+  | "
+    "  | /|    |\\ | "
+    "  |/ |    | \\| "
+    "  || |    |  | "
+    "  || +----+  | "
+    "  ||  ARCADE || "
+    "  ||=========|| "
+    "  ||  o   o  || "
+    "  |\\_________/| "
+    "   \\_________/  "
+  )
+  local right=(
+    "+---------------------------+"
+    "|  ARCADE Setup v${ARCADE_SETUP_VERSION}  |"
+    "+---------------------------+"
+    ""
+    "  Step: ${step_name}"
+    ""
+    "  ${progress_line}"
+    ""
+    ""
+    ""
+    ""
+  )
+  echo ""
+  local i
+  for i in 0 1 2 3 4 5 6 7 8 9 10; do
+    printf "%-16s %s\n" "${cabinet[$i]}" "${right[$i]}"
+  done
+  echo ""
+}
+
 # ── stage 0: bootstrap check ─────────────────────────────────────────────────
 
 missing_bootstrap=0
@@ -98,6 +146,58 @@ if [[ "$missing_bootstrap" -gt 0 ]]; then
   exit 1
 fi
 
+# ── --step: load existing conf and jump to named stage ───────────────────────
+INSTALL_DIR="${HOME}/arcade"
+STATE_ROOT="${HOME}/.arcade/projects"
+ANTHROPIC_BASE_URL=""
+ANTHROPIC_API_KEY=""
+OPENROUTER_API_KEY=""
+LITELLM_MASTER_KEY=""
+INFERENCE_MODE="oauth"
+CALX_VENV=""
+backend_choice="1"
+
+if [[ -n "$STEP_MODE" ]]; then
+  # Load existing arcade.conf as defaults
+  _conf_candidates=(
+    "${INSTALL_DIR}/arcade.conf"
+    "${HOME}/arcade/arcade.conf"
+  )
+  for _cf in "${_conf_candidates[@]}"; do
+    if [[ -f "$_cf" ]]; then
+      # shellcheck disable=SC1090
+      source "$_cf" 2>/dev/null || true
+      INSTALL_DIR="$(dirname "$_cf")"
+      STATE_ROOT="${ARCADE_STATE_ROOT:-${STATE_ROOT}}"
+      CALX_VENV="${CALX_VENV:-}"
+      # Map INFERENCE_MODE back to backend_choice
+      case "${INFERENCE_MODE:-oauth}" in
+        oauth)  backend_choice="1" ;;
+        api)
+          case "${ANTHROPIC_BASE_URL:-}" in
+            *openrouter*) backend_choice="2" ;;
+            *anthropic*)  backend_choice="3" ;;
+            *)            backend_choice="4" ;;
+          esac
+          ;;
+      esac
+      break
+    fi
+  done
+
+  # Validate the step name
+  case "$STEP_MODE" in
+    deps|install|backend|state|calx|mcp|verify|summary) ;;
+    *) echo "Unknown step: $STEP_MODE"; echo "Valid: deps install backend state calx mcp verify summary"; exit 1 ;;
+  esac
+fi
+
+# _stage_active <step_name>: true when this stage should run
+# In normal mode all stages run; in --step mode only the named stage runs
+_stage_active() {
+  [[ -z "$STEP_MODE" ]] || [[ "$STEP_MODE" == "$1" ]] || [[ "$1" == "summary" ]]
+}
+
 # ── stage 1: welcome ─────────────────────────────────────────────────────────
 
 echo ""
@@ -118,8 +218,9 @@ fi
 echo ""
 
 # ── stage 2: dependency check ─────────────────────────────────────────────────
+if _stage_active "deps"; then
 
-hdr "Dependencies"
+print_header "deps" "[deps] > install > backend > state > calx > mcp > verify"
 
 # Required tools
 req_missing=0
@@ -303,9 +404,12 @@ _litellm_s="$($litellm_ok && echo "litellm OK"  || echo "litellm not found")"
 _mcp_s="$(    $mcp_ok     && echo "MCP OK"      || echo "MCP not found")"
 echo "  Local stack:     ${_ollama_s} / ${_litellm_s} / ${_mcp_s}"
 
-# ── stage 3: install directory ────────────────────────────────────────────────
+fi
 
-hdr "Install directory"
+# ── stage 3: install directory ────────────────────────────────────────────────
+if _stage_active "install"; then
+
+print_header "install" "deps > [install] > backend > state > calx > mcp > verify"
 
 echo "Where should ARCADE be installed?"
 echo ""
@@ -360,9 +464,12 @@ else
     || die "git clone failed — check your network connection and try again."
 fi
 
-# ── stage 4: inference backend ────────────────────────────────────────────────
+fi
 
-hdr "Inference backend"
+# ── stage 4: inference backend ────────────────────────────────────────────────
+if _stage_active "backend"; then
+
+print_header "backend" "deps > install > [backend] > state > calx > mcp > verify"
 
 echo "How will ARCADE connect to Claude?"
 echo ""
@@ -487,9 +594,12 @@ case "$backend_choice" in
     ;;
 esac
 
-# ── stage 5: state directory ──────────────────────────────────────────────────
+fi
 
-hdr "Project state"
+# ── stage 5: state directory ──────────────────────────────────────────────────
+if _stage_active "state"; then
+
+print_header "state" "deps > install > backend > [state] > calx > mcp > verify"
 
 echo "ARCADE stores project queues, run logs, and context files in a"
 echo "persistent directory. This should survive reboots — avoid /tmp."
@@ -519,9 +629,12 @@ if [[ "$STATE_ROOT" == /mnt/* || "$STATE_ROOT" == /nfs/* ]]; then
   fi
 fi
 
-# ── stage 6: optional components ─────────────────────────────────────────────
+fi
 
-hdr "Calx — behavioral correction"
+# ── stage 6: optional components ─────────────────────────────────────────────
+if _stage_active "calx"; then
+
+print_header "calx" "deps > install > backend > state > [calx] > mcp > verify"
 
 echo "Calx observes Claude Code sessions and corrects behavioral drift."
 echo "Without it the loop works, but long autonomous runs may go off-spec."
@@ -592,9 +705,12 @@ else
   ok "OpenHands detected on localhost:3000"
 fi
 
-# ── stage 6b: MCP server ─────────────────────────────────────────────────────
+fi
 
-hdr "MCP server (optional)"
+# ── stage 6b: MCP server ─────────────────────────────────────────────────────
+if _stage_active "mcp"; then
+
+print_header "mcp" "deps > install > backend > state > calx > [mcp] > verify"
 
 echo "An MCP server lets AI agents (IronClaw, Claude Code, or any"
 echo "MCP-compatible agent) control ARCADE directly — start loops,"
@@ -758,9 +874,12 @@ else
   miss "MCP server skipped — see ADVANCED.md to set up later"
 fi
 
-# ── stage 7: write arcade.conf ────────────────────────────────────────────────
+fi
 
-hdr "Writing configuration"
+# ── stage 7: write arcade.conf ────────────────────────────────────────────────
+if _stage_active "verify"; then
+
+print_header "verify" "deps > install > backend > state > calx > mcp > [verify]"
 
 CONF_FILE="${INSTALL_DIR}/arcade.conf"
 
@@ -819,7 +938,7 @@ ok "arcade.conf written to ${INSTALL_DIR}/arcade.conf"
 
 # ── stage 7b: verify backend ──────────────────────────────────────────────────
 
-hdr "Verifying configuration"
+print_header "verify" "deps > install > backend > state > calx > mcp > [verify]"
 
 _verify_ok=false
 _verify_err=""
@@ -956,66 +1075,44 @@ else
   miss "smoketest skipped"
 fi
 
-# ── stage 9: quick start guide ────────────────────────────────────────────────
+fi
 
-hdr "You're ready"
+# ── stage 9: summary ──────────────────────────────────────────────────────────
+if _stage_active "summary"; then
 
-echo "ARCADE is installed at: ${INSTALL_DIR}"
-echo "Configuration:          ${INSTALL_DIR}/arcade.conf"
-echo "Project state:          ${STATE_ROOT}"
-echo ""
+print_header "summary" "deps > install > backend > state > calx > mcp > verify > [done]"
 
-hdr "Starting a real project"
+# Read values — fall back to arcade.conf when running --step summary standalone
+_conf_file="${INSTALL_DIR}/arcade.conf"
+if [[ -f "$_conf_file" ]]; then
+  source "$_conf_file" 2>/dev/null || true
+fi
 
-echo "A project needs four files. Create them before running the loop:"
-echo ""
-echo "  queue.md      Ordered task list. One chunk = one loop run."
-echo "  CONTEXT.md    Project background and constraints for Claude to read."
-echo "  CLAUDE.md     Behavioral instructions: promise format, commit style."
-echo "  issues.md     Known problems to address (can be empty)."
-echo ""
-echo "Place them in:"
-echo "  ${INSTALL_DIR}/projects/my-project/"
-echo ""
-echo "Then run:"
-echo "  cd ${INSTALL_DIR}"
-echo "  ./masterarcade.sh --init --project my-project"
-echo "  ./masterarcade.sh --project my-project"
-echo ""
+_backend_label="${INFERENCE_MODE:-oauth}"
+_backend_url="${ANTHROPIC_BASE_URL:-OAuth / Claude Max}"
+_state="${ARCADE_STATE_ROOT:-${STATE_ROOT}}"
+_calx_val="${CALX_VENV:-not installed}"
+_mcp_present="absent"
+[[ -d "${INSTALL_DIR}/mcp-server" ]] && _mcp_present="present"
+_claude_ver="$(claude --version 2>/dev/null || echo "not found")"
 
-hdr "Writing queue.md"
-
-echo "One chunk per line. Tag each with [REASONING], [SCAFFOLD], or [OAUTH]:"
+echo "  Setup complete."
 echo ""
-echo "  - [ ] [REASONING] Design the data model and document decisions"
-echo "  - [ ] [SCAFFOLD] Generate project scaffold and directory structure"
-echo "  - [ ] [REASONING] Implement core logic and write tests"
-echo "  - [ ] [OAUTH] Heavy refactoring session — use subscription billing"
+echo "  backend     ${_backend_label} (${_backend_url})"
+echo "  state       ${_state}"
+echo "  calx        ${_calx_val}"
+echo "  mcp server  ${INSTALL_DIR}/mcp-server/ (${_mcp_present})"
+echo "  claude      ${_claude_ver}"
 echo ""
-echo "Keep chunks small enough to complete in one session."
-echo "If a chunk fails repeatedly, ARCADE will split it automatically."
+echo "  To start your first project:"
+echo "    cd ${INSTALL_DIR}"
+echo "    ./masterarcade.sh --init --project my-project"
+echo "    ./masterarcade.sh --project my-project"
 echo ""
-
-hdr "Generating prep documents with AI"
-
-echo "You can use Claude (in claude.ai or via API) to generate your prep"
-echo "files. Describe your project and ask for:"
+echo "  Re-run any step:"
+echo "    bash <(curl -fsSL https://raw.githubusercontent.com/LeMajesticMoose/arcade/main/setup.sh) --step backend"
 echo ""
-echo '  "Generate queue.md, CONTEXT.md, and CLAUDE.md for this project'
-echo '   following the ARCADE format. The project is: [your description]"'
-echo ""
-echo "See SETUP.md for a worked example and file templates."
+echo "  Full documentation: ${INSTALL_DIR}/README.md"
 echo ""
 
-hdr "Commands"
-
-echo "  ./masterarcade.sh --status"
-echo "  ./masterarcade.sh --project NAME --status"
-echo "  ./masterarcade.sh --project NAME --add-task \"task description\""
-echo "  ./masterarcade.sh --project NAME --mode oauth"
-echo "  ./masterarcade.sh --project NAME --resume"
-echo ""
-echo "Full documentation: ${INSTALL_DIR}/README.md"
-echo "Setup reference:    ${INSTALL_DIR}/SETUP.md"
-echo "Advanced options:   ${INSTALL_DIR}/ADVANCED.md"
-echo ""
+fi
