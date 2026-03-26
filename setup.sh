@@ -222,173 +222,269 @@ if _stage_active "deps"; then
 
 print_header "deps" "[deps] > install > backend > state > calx > mcp > verify"
 
-# Required tools
-req_missing=0
-for tool in git curl python3; do
-  if command -v "$tool" &>/dev/null; then
-    ok "$tool"
-  else
-    fail "$tool   required"
-    req_missing=$((req_missing + 1))
-  fi
-done
-
-# pip — optional (needed for Calx install only)
+# ── State variables used by downstream stages ─────────────────────────────────
+claude_ok=false
+calx_ok=false
+calx_venv_found=""
 pip_cmd=""
+ollama_ok=false
+litellm_ok=false
+mcp_ok=false
+ironclaw_ok=false
+
+# ── Check all deps upfront — no installs yet ──────────────────────────────────
+echo "Checking dependencies..."
+echo ""
+
+_missing=()   # names of missing deps, in display order
+
+# python3
+if command -v python3 &>/dev/null; then
+  ok "python3"
+else
+  fail "python3   not found"
+  _missing+=("python3")
+fi
+
+# pip3 / pip
 if command -v pip3 &>/dev/null; then
   ok "pip3"
   pip_cmd="pip3"
 elif command -v pip &>/dev/null; then
-  ok "pip"
+  ok "pip  (pip3 alias)"
   pip_cmd="pip"
 else
-  miss "pip   not found — Calx install will be skipped (install python3-pip to enable)"
+  fail "pip3      not found"
+  _missing+=("pip3")
 fi
 
-if [[ "$req_missing" -gt 0 ]]; then
-  echo ""
-  echo -e "${RED}${BOLD}Required tools are missing. Install them and re-run.${RESET}"
-  echo ""
-  echo "  Ubuntu/Debian:  sudo apt install git curl python3"
-  echo "  macOS:          brew install git curl python3"
-  echo "  Fedora/RHEL:    sudo dnf install git curl python3"
-  echo ""
-  exit 1
+# node
+if command -v node &>/dev/null; then
+  ok "node"
+else
+  fail "node      not found"
+  _missing+=("node")
 fi
 
-# Claude Code CLI
-echo ""
-claude_ok=false
+# npm
+if command -v npm &>/dev/null; then
+  ok "npm"
+else
+  fail "npm       not found"
+  _missing+=("npm")
+fi
+
+# claude CLI
 if command -v claude &>/dev/null; then
-  ok "claude   Claude Code CLI"
+  ok "claude    Claude Code CLI"
   claude_ok=true
 else
-  fail "claude   Claude Code CLI — not found"
-  echo ""
-  echo "  Claude Code CLI is required to run ARCADE loops."
-  echo ""
-  if $YES_MODE; then
-    miss "claude   --yes mode — skipping install (install manually before running loops)"
-    claude_install_choice="3"
-  else
-    echo "  [1] npm install -g @anthropic-ai/claude-code  (recommended)"
-    echo "  [2] See manual install: https://docs.anthropic.com/en/docs/claude-code"
-    echo "  [3] Skip for now (loops will not run)"
-    echo ""
-    read -rp "  Choice [1]: " claude_install_choice
-    claude_install_choice="${claude_install_choice:-1}"
-  fi
-
-  case "$claude_install_choice" in
-    1)
-      echo ""
-      if ! command -v npm &>/dev/null; then
-        miss "npm not found — install Node.js first:"
-        echo ""
-        echo "    Ubuntu/Debian:  sudo apt install nodejs npm"
-        echo "    macOS:          brew install node"
-        echo "    Fedora/RHEL:    sudo dnf install nodejs npm"
-        echo "    Or:             https://nodejs.org/en/download"
-        echo ""
-        echo "  After installing Node.js, run:"
-        echo "    npm install -g @anthropic-ai/claude-code"
-        echo "  then re-run this setup script."
-        echo ""
-      else
-        echo "  Running: npm install -g @anthropic-ai/claude-code"
-        echo ""
-        if npm install -g @anthropic-ai/claude-code 2>&1; then
-          if command -v claude &>/dev/null; then
-            ok "claude   Claude Code CLI installed"
-            claude_ok=true
-          else
-            miss "install completed but claude not found in PATH — open a new terminal and re-run setup"
-          fi
-        else
-          miss "npm install failed — try manually: npm install -g @anthropic-ai/claude-code"
-          echo "  Or see: https://docs.anthropic.com/en/docs/claude-code"
-          echo ""
-        fi
-      fi
-      ;;
-    2)
-      echo ""
-      echo "  Manual install: https://docs.anthropic.com/en/docs/claude-code"
-      echo "  After installing, re-run this setup script."
-      echo ""
-      ;;
-    3)
-      echo ""
-      miss "claude   skipped — loops will not run until Claude Code is installed"
-      ;;
-    *)
-      miss "claude   invalid choice — continuing without Claude Code"
-      ;;
-  esac
+  fail "claude    Claude Code CLI — not found"
+  _missing+=("claude")
 fi
 
-# Optional: local inference stack
-echo ""
-ollama_ok=false
-if command -v ollama &>/dev/null || curl -sf --max-time 2 "http://localhost:11434/api/tags" &>/dev/null; then
-  ok "ollama   local inference available"
-  ollama_ok=true
-else
-  miss "ollama   not detected"
-fi
-
-litellm_ok=false
-if curl -sf --max-time 3 "http://localhost:4000/health" &>/dev/null; then
-  ok "litellm  proxy detected on localhost:4000"
-  litellm_ok=true
-else
-  miss "litellm  not responding — check connectivity after setup"
-fi
-
-mcp_ok=false
-if curl -sf --max-time 2 "http://localhost:8000/" &>/dev/null; then
-  ok "mcp      server detected on localhost:8000"
-  mcp_ok=true
-else
-  miss "mcp      not detected on localhost:8000"
-fi
-
-ironclaw_ok=false
-if command -v ironclaw &>/dev/null; then
-  ok "ironclaw"
-  ironclaw_ok=true
-else
-  miss "ironclaw not found"
-fi
-
-# Optional: Calx
-echo ""
-calx_ok=false
-calx_venv_found=""
-for candidate in \
+# calx
+for _candidate in \
     "$(command -v calx 2>/dev/null || true)" \
     "$(command -v getcalx 2>/dev/null || true)" \
     "${HOME}/.calx-venv/bin/calx" \
     "${HOME}/.local/bin/calx"; do
-  if [[ -n "$candidate" && -x "$candidate" ]]; then
+  if [[ -n "$_candidate" && -x "$_candidate" ]]; then
     calx_ok=true
-    if [[ "$candidate" == *"/.calx-venv/bin/calx" ]]; then
+    if [[ "$_candidate" == *"/.calx-venv/bin/calx" ]]; then
       calx_venv_found="${HOME}/.calx-venv"
     fi
     break
   fi
 done
-
 if $calx_ok; then
-  ok "calx     behavioral correction installed"
+  ok "calx      behavioral correction installed"
 else
-  miss "calx     not found — will offer install"
+  miss "calx      not found"
+  _missing+=("calx")
+fi
+
+# Optional: local inference stack (check-only, no install offered)
+echo ""
+if command -v ollama &>/dev/null || curl -sf --max-time 2 "http://localhost:11434/api/tags" &>/dev/null; then
+  ok "ollama    local inference available"
+  ollama_ok=true
+else
+  miss "ollama    not detected"
+fi
+
+if curl -sf --max-time 3 "http://localhost:4000/health" &>/dev/null; then
+  ok "litellm   proxy detected on localhost:4000"
+  litellm_ok=true
+else
+  miss "litellm   not responding — check connectivity after setup"
+fi
+
+if curl -sf --max-time 2 "http://localhost:8000/" &>/dev/null; then
+  ok "mcp       server detected on localhost:8000"
+  mcp_ok=true
+else
+  miss "mcp       not detected on localhost:8000"
+fi
+
+if command -v ironclaw &>/dev/null; then
+  ok "ironclaw"
+  ironclaw_ok=true
+else
+  miss "ironclaw  not found"
+fi
+
+# ── Single batch install prompt ───────────────────────────────────────────────
+if [[ ${#_missing[@]} -gt 0 ]]; then
+  echo ""
+  _missing_list="$(IFS=', '; echo "${_missing[*]}")"
+  echo -e "  ${YELLOW}${BOLD}The following dependencies are missing: ${_missing_list}${RESET}"
+  echo ""
+
+  _do_install=false
+  if $YES_MODE; then
+    echo "  (--yes mode: skipping dependency installs — install manually before running loops)"
+  else
+    read -rp "  Install them now? [Y/n]: " _install_ans
+    _install_ans="${_install_ans:-Y}"
+    if [[ "$_install_ans" =~ ^[Yy]$ ]]; then
+      _do_install=true
+    fi
+  fi
+
+  if $_do_install; then
+    echo ""
+    # ── system packages via apt ───────────────────────────────────────────────
+    _apt_pkgs=()
+    for _dep in "${_missing[@]}"; do
+      case "$_dep" in
+        python3) _apt_pkgs+=("python3") ;;
+        pip3)    _apt_pkgs+=("python3-pip") ;;
+        node)    _apt_pkgs+=("nodejs") ;;
+        npm)     _apt_pkgs+=("npm") ;;
+      esac
+    done
+
+    if [[ ${#_apt_pkgs[@]} -gt 0 ]]; then
+      echo "  Installing system packages: ${_apt_pkgs[*]}"
+      if sudo apt-get install -y "${_apt_pkgs[@]}" 2>&1 | sed 's/^/    /'; then
+        for _dep in "${_missing[@]}"; do
+          case "$_dep" in
+            python3)
+              command -v python3 &>/dev/null && ok "python3 installed" \
+                || miss "python3 install may need a new shell to take effect"
+              ;;
+            pip3)
+              if command -v pip3 &>/dev/null; then
+                pip_cmd="pip3"
+                ok "pip3 installed"
+              elif command -v pip &>/dev/null; then
+                pip_cmd="pip"
+                ok "pip installed"
+              else
+                miss "pip3 install may need a new shell to take effect"
+              fi
+              ;;
+            node)
+              command -v node &>/dev/null && ok "node installed" \
+                || miss "node install may need a new shell to take effect"
+              ;;
+            npm)
+              command -v npm &>/dev/null && ok "npm installed" \
+                || miss "npm install may need a new shell to take effect"
+              ;;
+          esac
+        done
+      else
+        miss "apt install failed — try: sudo apt-get install ${_apt_pkgs[*]}"
+      fi
+      echo ""
+    fi
+
+    # ── claude CLI via npm ────────────────────────────────────────────────────
+    if printf '%s\n' "${_missing[@]}" | grep -qx "claude"; then
+      echo "  Installing Claude Code CLI..."
+      if command -v npm &>/dev/null; then
+        if npm install -g @anthropic-ai/claude-code 2>&1 | sed 's/^/    /'; then
+          if command -v claude &>/dev/null; then
+            ok "claude installed"
+            claude_ok=true
+          else
+            miss "claude install completed but not in PATH — open a new shell and re-run setup"
+          fi
+        else
+          miss "npm install failed — try: npm install -g @anthropic-ai/claude-code"
+        fi
+      else
+        miss "npm not available — install node/npm first, then: npm install -g @anthropic-ai/claude-code"
+      fi
+      echo ""
+    fi
+
+    # ── calx via pip / venv ───────────────────────────────────────────────────
+    if printf '%s\n' "${_missing[@]}" | grep -qx "calx"; then
+      echo "  Installing Calx..."
+      if [[ -z "$pip_cmd" ]]; then
+        miss "Calx install skipped — pip not available (install python3-pip to enable)"
+      else
+        calx_install_ok=false
+
+        if $pip_cmd install getcalx --quiet --user 2>/dev/null; then
+          calx_install_ok=true
+          ok "Calx installed via ${pip_cmd} --user"
+        else
+          echo "    User install failed — checking venv support..."
+          if ! python3 -m venv --help &>/dev/null 2>&1; then
+            echo "    python3-venv not found — attempting to install..."
+            if sudo apt-get install -y python3.11-venv 2>/dev/null \
+               || sudo apt-get install -y python3-venv 2>/dev/null; then
+              ok "python3-venv installed"
+            else
+              miss "python3-venv install failed — falling back to pip --user"
+            fi
+          fi
+          if python3 -m venv "${HOME}/.calx-venv" 2>/dev/null \
+             && "${HOME}/.calx-venv/bin/pip" install getcalx --quiet 2>/dev/null; then
+            calx_install_ok=true
+            calx_venv_found="${HOME}/.calx-venv"
+            ok "Calx installed in ${HOME}/.calx-venv"
+          else
+            echo "    Venv failed — retrying pip --user..."
+            if $pip_cmd install --user getcalx --quiet 2>/dev/null; then
+              calx_install_ok=true
+              ok "Calx installed via ${pip_cmd} --user (fallback)"
+            fi
+          fi
+        fi
+
+        if $calx_install_ok; then
+          calx_ok=true
+        else
+          miss "Calx install failed — install manually:"
+          echo ""
+          echo "    pip install getcalx"
+          echo "    # or: python3 -m venv ~/.calx-venv && ~/.calx-venv/bin/pip install getcalx"
+          echo ""
+        fi
+      fi
+      echo ""
+    fi
+
+  else
+    echo ""
+    echo -e "  ${YELLOW}Warning: missing dependencies may prevent ARCADE from functioning correctly.${RESET}"
+    echo ""
+  fi
 fi
 
 # Summary
 echo ""
 echo -e "  ${BOLD}Summary${RESET}"
-echo -e "  Required tools:  ${GREEN}OK${RESET}"
+if command -v python3 &>/dev/null; then
+  echo -e "  python3:         ${GREEN}OK${RESET}"
+else
+  echo -e "  python3:         ${RED}missing${RESET}"
+fi
 if $claude_ok; then
   echo -e "  Claude Code:     ${GREEN}OK${RESET}"
 else
@@ -397,7 +493,7 @@ fi
 if $calx_ok; then
   echo -e "  Calx:            ${GREEN}found${RESET}"
 else
-  echo -e "  Calx:            ${YELLOW}not found${RESET}  (will offer install)"
+  echo -e "  Calx:            ${YELLOW}not found${RESET}  (will offer config in calx step)"
 fi
 _ollama_s="$( $ollama_ok  && echo "ollama OK"   || echo "ollama not found")"
 _litellm_s="$($litellm_ok && echo "litellm OK"  || echo "litellm not found")"
