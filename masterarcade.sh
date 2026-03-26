@@ -533,6 +533,7 @@ cmd_run() {
 
       # Build Claude Code command
       # Run non-interactively with --print to pass prompt
+      export QUEUE_PATH="$d/queue.md"
       if [ -f "$START_ARCADE" ]; then
         ARCADE_MODE="$effective_mode" \
         ARCADE_PROJECT="$project" \
