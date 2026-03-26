@@ -36,9 +36,8 @@ fi
 # context collapse. It operates via Claude Code's native hooks mechanism.
 #
 # CALX_VENV: path to the venv containing the getcalx package.
-# Set in arcade.conf: CALX_VENV="/path/to/your/calx-venv"
-# If unset or the binary is not found, Calx is skipped silently.
-CALX_VENV="${CALX_VENV:-}"
+# Override via env var to relocate the venv without editing this script.
+CALX_VENV="${CALX_VENV:-/home/coder/.calx-venv}"
 CALX_BIN="$CALX_VENV/bin/calx"
 
 _calx_ensure() {
@@ -90,16 +89,82 @@ _calx_ensure() {
 # Run Calx setup for the current working directory
 _calx_ensure "$(pwd)"
 
+# ── Backend routing ───────────────────────────────────────────────────────────
+# Load arcade.conf from the script's own directory (or ARCADE_CONF env override).
+# arcade.conf is sourced *after* cd so we use the script's directory, not cwd.
+_arcade_conf="${ARCADE_CONF:-$(dirname "$(realpath "$0")")/arcade.conf}"
+if [[ -f "$_arcade_conf" ]]; then
+  # shellcheck disable=SC1090
+  source "$_arcade_conf"
+fi
+
+# Resolve which routing path applies for this invocation.
+# BACKEND_MODE: oauth | api | mix  (default: oauth for backward compat)
+_backend="${BACKEND_MODE:-oauth}"
+
+if [[ "$_backend" == "mix" ]]; then
+  # Detect chunk type from the next pending line in queue.md.
+  # QUEUE_PATH must be set in arcade.conf or passed via environment.
+  _queue="${QUEUE_PATH:-}"
+  _chunk_label=""
+  if [[ -n "$_queue" && -f "$_queue" ]]; then
+    _chunk_label=$(grep -m1 '^\s*- \[ \]' "$_queue" 2>/dev/null \
+      | grep -oP '\[(REASONING|SCAFFOLD|OAUTH)\]' | tr -d '[]' || true)
+  fi
+  case "${_chunk_label:-}" in
+    SCAFFOLD) _backend="api"   ;;
+    *)        _backend="oauth" ;;   # REASONING, OAUTH, or no label → oauth
+  esac
+  echo "[arcade] mix mode: chunk=${_chunk_label:-none} → ${_backend} path"
+fi
+
+# Apply the resolved backend path
+case "$_backend" in
+  oauth)
+    case "${OAUTH_PROVIDER:-claude-max}" in
+      claude-max)
+        # Native auth — unset base URL so Claude Code uses its built-in default
+        unset ANTHROPIC_BASE_URL 2>/dev/null || true
+        ;;
+      claude-pro)
+        # API key is in ANTHROPIC_API_KEY from arcade.conf; just ensure base URL is clear
+        export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+        unset ANTHROPIC_BASE_URL 2>/dev/null || true
+        ;;
+      custom)
+        # Custom OAuth endpoint — strip /v1 if present (Claude Code appends it)
+        export ANTHROPIC_BASE_URL="${OAUTH_ENDPOINT%/v1}"
+        ;;
+    esac
+    ;;
+  api)
+    # Strip trailing /v1 — Claude Code appends /v1 automatically
+    export ANTHROPIC_BASE_URL="${API_ENDPOINT%/v1}"
+    export ANTHROPIC_API_KEY="${API_KEY:-${ANTHROPIC_API_KEY:-}}"
+    ;;
+esac
+
 # ── Model selection ───────────────────────────────────────────────────────────
+# API_MODEL (from arcade.conf) overrides mode defaults for api/mix paths.
+# Per-mode env vars (ARCADE_REASONING_MODEL etc.) override the built-in defaults.
 case "$mode" in
   scaffold)
-    MODEL="${ARCADE_SCAFFOLD_MODEL:-claude-haiku-4-5-20251001}"
+    # On api path use API_MODEL if set; oauth path always uses subscription model
+    if [[ "$_backend" == "api" && -n "${API_MODEL:-}" ]]; then
+      MODEL="$API_MODEL"
+    else
+      MODEL="${ARCADE_SCAFFOLD_MODEL:-claude-haiku-4-5-20251001}"
+    fi
     ;;
   oauth)
     MODEL="${ARCADE_OAUTH_MODEL:-claude-haiku-4-5-20251001}"
     ;;
   reasoning|*)
-    MODEL="${ARCADE_REASONING_MODEL:-claude-sonnet-4-6}"
+    if [[ "$_backend" == "api" && -n "${API_MODEL:-}" ]]; then
+      MODEL="$API_MODEL"
+    else
+      MODEL="${ARCADE_REASONING_MODEL:-claude-sonnet-4-6}"
+    fi
     ;;
 esac
 

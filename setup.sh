@@ -154,6 +154,14 @@ ANTHROPIC_API_KEY=""
 OPENROUTER_API_KEY=""
 LITELLM_MASTER_KEY=""
 INFERENCE_MODE="oauth"
+BACKEND_MODE="oauth"
+OAUTH_PROVIDER=""
+OAUTH_ENDPOINT=""
+API_PROVIDER=""
+API_ENDPOINT=""
+API_KEY=""
+API_MODEL=""
+_mode_choice="1"
 CALX_VENV=""
 backend_choice="1"
 
@@ -170,16 +178,12 @@ if [[ -n "$STEP_MODE" ]]; then
       INSTALL_DIR="$(dirname "$_cf")"
       STATE_ROOT="${ARCADE_STATE_ROOT:-${STATE_ROOT}}"
       CALX_VENV="${CALX_VENV:-}"
-      # Map INFERENCE_MODE back to backend_choice
-      case "${INFERENCE_MODE:-oauth}" in
-        oauth)  backend_choice="1" ;;
-        api)
-          case "${ANTHROPIC_BASE_URL:-}" in
-            *openrouter*) backend_choice="2" ;;
-            *anthropic*)  backend_choice="3" ;;
-            *)            backend_choice="4" ;;
-          esac
-          ;;
+      # Map BACKEND_MODE / INFERENCE_MODE back to _mode_choice for display
+      case "${BACKEND_MODE:-${INFERENCE_MODE:-oauth}}" in
+        oauth) _mode_choice="1" ;;
+        api)   _mode_choice="2" ;;
+        mix)   _mode_choice="3" ;;
+        *)     _mode_choice="1" ;;
       esac
       break
     fi
@@ -567,126 +571,208 @@ if _stage_active "backend"; then
 
 print_header "backend" "deps > install > [backend] > state > calx > mcp > verify"
 
-echo "How will ARCADE connect to Claude?"
-echo ""
-echo "  [1] Claude Max subscription (OAuth)"
-echo "      Use your Anthropic subscription — billed to your plan, not per token"
-echo "      Best for: heavy development sessions, users with active Claude Max"
-echo ""
-echo "  [2] OpenRouter API"
-echo "      Pay per token via openrouter.ai — access to Claude and other models"
-echo "      Best for: API users, occasional use, multi-model access"
-echo ""
-echo "  [3] Anthropic API direct"
-echo "      Pay per token directly with Anthropic"
-echo "      Best for: simple setup, Claude-only users"
-echo ""
-echo "  [4] Local LiteLLM proxy"
-echo "      Self-hosted proxy mixing local and API models"
-echo "      Best for: distributed setups, users with local inference hardware"
-echo "      Requires: LiteLLM running at a reachable address"
-echo ""
-if $YES_MODE; then
-  backend_choice="${ARCADE_BACKEND:-1}"
-  echo "  (--yes mode: using backend ${backend_choice})"
-else
-  read -rp "  Choice [1]: " backend_choice
-  backend_choice="${backend_choice:-1}"
-fi
-
+# New vars written to arcade.conf
+BACKEND_MODE="oauth"
+OAUTH_PROVIDER=""
+OAUTH_ENDPOINT=""
+API_PROVIDER=""
+API_ENDPOINT=""
+API_KEY=""
+API_MODEL=""
 ANTHROPIC_BASE_URL=""
 ANTHROPIC_API_KEY=""
 OPENROUTER_API_KEY=""
 LITELLM_MASTER_KEY=""
+# INFERENCE_MODE kept for backward compat with --step backend conf reload
 INFERENCE_MODE="oauth"
 
-case "$backend_choice" in
-  1)
-    ANTHROPIC_BASE_URL=""
-    ANTHROPIC_API_KEY=""
-    INFERENCE_MODE="oauth"
-    echo ""
-    ok "OAuth mode selected — billing via Claude Max subscription"
-    if command -v claude &>/dev/null; then
-      echo ""
-      if claude auth status 2>/dev/null | grep -qi "logged in"; then
-        ok "claude auth   logged in"
-      else
-        miss "claude auth   run 'claude auth login' before running loops"
+# ── LEVEL 1: select mode ──────────────────────────────────────────────────────
+echo "How will ARCADE route inference?"
+echo ""
+echo "  [1] oauth  — subscription only (unlimited, \$0 per token)"
+echo "      All chunks use your Claude Max subscription"
+echo ""
+echo "  [2] api    — API/LiteLLM only (pay per token)"
+echo "      All chunks use a configured API endpoint"
+echo ""
+echo "  [3] mix    — OAuth for [REASONING], API for [SCAFFOLD]"
+echo "      Heavy reasoning runs on subscription; cheap scaffolding on API"
+echo ""
+if $YES_MODE; then
+  _mode_choice="${ARCADE_BACKEND:-1}"
+  echo "  (--yes mode: using mode ${_mode_choice})"
+else
+  read -rp "  Choice [1]: " _mode_choice
+  _mode_choice="${_mode_choice:-1}"
+fi
+
+case "$_mode_choice" in
+  1) BACKEND_MODE="oauth"  ;;
+  2) BACKEND_MODE="api"    ;;
+  3) BACKEND_MODE="mix"    ;;
+  *) die "Invalid mode choice." ;;
+esac
+ok "Mode: ${BACKEND_MODE}"
+
+# ── helper: configure oauth provider ─────────────────────────────────────────
+_configure_oauth() {
+  echo ""
+  echo "  Select OAuth provider:"
+  echo ""
+  echo "    [1] Anthropic Claude Max (native, recommended)"
+  echo "        Uses your existing claude auth session — no extra key needed"
+  echo ""
+  echo "    [2] Claude Pro via API key"
+  echo "        Authenticate with an Anthropic API key"
+  echo ""
+  echo "    [3] Custom endpoint (enter URL)"
+  echo ""
+  read -rp "    Choice [1]: " _op
+  _op="${_op:-1}"
+  case "$_op" in
+    1)
+      OAUTH_PROVIDER="claude-max"
+      ok "OAuth provider: Claude Max (native)"
+      if command -v claude &>/dev/null; then
+        echo ""
+        if claude auth status 2>/dev/null | grep -qi "logged in"; then
+          ok "claude auth   logged in"
+        else
+          miss "claude auth   run 'claude auth login' before running loops"
+        fi
       fi
+      ;;
+    2)
+      OAUTH_PROVIDER="claude-pro"
+      echo ""
+      echo "    Anthropic API key (input hidden):"
+      read -rsp "    Key: " _raw_key
+      echo ""
+      ANTHROPIC_API_KEY="$_raw_key"
+      ok "OAuth provider: Claude Pro (API key)"
+      ;;
+    3)
+      OAUTH_PROVIDER="custom"
+      echo ""
+      read -rp "    OAuth endpoint URL: " OAUTH_ENDPOINT
+      # Strip trailing /v1 if present — Claude Code appends it automatically
+      OAUTH_ENDPOINT="${OAUTH_ENDPOINT%/v1}"
+      ok "OAuth provider: custom (${OAUTH_ENDPOINT})"
+      ;;
+    *)
+      OAUTH_PROVIDER="claude-max"
+      miss "Invalid choice — defaulting to claude-max"
+      ;;
+  esac
+}
+
+# ── helper: configure api provider ───────────────────────────────────────────
+_configure_api() {
+  echo ""
+  echo "  Select API provider:"
+  echo ""
+  echo "    [1] LiteLLM (local proxy — recommended for MooseNet)"
+  echo "    [2] OpenRouter (direct)"
+  echo "    [3] Anthropic API (direct)"
+  echo "    [4] OpenAI API (direct)"
+  echo "    [5] Custom endpoint (enter URL)"
+  echo ""
+  read -rp "    Choice [1]: " _ap
+  _ap="${_ap:-1}"
+  local _provider_label=""
+  case "$_ap" in
+    1)
+      API_PROVIDER="litellm"
+      _provider_label="LiteLLM"
+      echo ""
+      read -rp "    LiteLLM proxy URL [http://localhost:4000]: " _raw_url
+      API_ENDPOINT="${_raw_url:-http://localhost:4000}"
+      # Strip trailing /v1
+      API_ENDPOINT="${API_ENDPOINT%/v1}"
+      echo ""
+      if curl -sf --max-time 5 "${API_ENDPOINT}/health" &>/dev/null; then
+        ok "LiteLLM reachable at ${API_ENDPOINT}"
+      else
+        miss "LiteLLM not responding at ${API_ENDPOINT} — check proxy before running loops"
+      fi
+      echo ""
+      echo "    LiteLLM master key for spend logging (input hidden, press Enter to skip):"
+      read -rsp "    Key: " LITELLM_MASTER_KEY || true
+      echo ""
+      [[ -n "$LITELLM_MASTER_KEY" ]] \
+        && ok "LiteLLM master key accepted" \
+        || miss "No master key — cost= field will show \$0.0000 in run-log"
+      ;;
+    2)
+      API_PROVIDER="openrouter"
+      _provider_label="OpenRouter"
+      API_ENDPOINT="https://openrouter.ai/api"
+      ;;
+    3)
+      API_PROVIDER="anthropic"
+      _provider_label="Anthropic API"
+      API_ENDPOINT="https://api.anthropic.com"
+      ;;
+    4)
+      API_PROVIDER="openai"
+      _provider_label="OpenAI API"
+      API_ENDPOINT="https://api.openai.com"
+      ;;
+    5)
+      API_PROVIDER="custom"
+      _provider_label="custom"
+      echo ""
+      read -rp "    API base URL (no trailing /v1): " API_ENDPOINT
+      API_ENDPOINT="${API_ENDPOINT%/v1}"
+      ;;
+    *)
+      API_PROVIDER="litellm"
+      _provider_label="LiteLLM"
+      API_ENDPOINT="http://localhost:4000"
+      miss "Invalid choice — defaulting to LiteLLM at localhost:4000"
+      ;;
+  esac
+  ok "API provider: ${API_PROVIDER} (${API_ENDPOINT})"
+
+  # API key (skip for LiteLLM if master key already captured above)
+  if [[ "$API_PROVIDER" != "litellm" ]]; then
+    echo ""
+    echo "    Enter API key for ${_provider_label} (input hidden):"
+    read -rsp "    Key: " API_KEY
+    echo ""
+    if [[ "$API_PROVIDER" == "openrouter" ]]; then
+      OPENROUTER_API_KEY="$API_KEY"
     fi
+    ok "API key accepted"
+  else
+    # For LiteLLM, use master key as API key if provided
+    [[ -n "$LITELLM_MASTER_KEY" ]] && API_KEY="$LITELLM_MASTER_KEY"
+  fi
+
+  # Model name
+  echo ""
+  read -rp "    Model name (e.g. claude-haiku-4-5, leave blank for default): " API_MODEL
+  [[ -n "$API_MODEL" ]] && ok "Model: ${API_MODEL}" || ok "Model: default"
+}
+
+# ── LEVEL 2: run provider submenus ───────────────────────────────────────────
+echo ""
+case "$BACKEND_MODE" in
+  oauth)
+    _configure_oauth
+    INFERENCE_MODE="oauth"
     ;;
-  2)
+  api)
+    _configure_api
     INFERENCE_MODE="api"
-    ANTHROPIC_BASE_URL="https://openrouter.ai/api/v1"
-    echo ""
-    if $YES_MODE; then
-      ANTHROPIC_API_KEY="${ARCADE_API_KEY:-}"
-      OPENROUTER_API_KEY="${ARCADE_API_KEY:-}"
-      [[ -n "$ANTHROPIC_API_KEY" ]] && ok "key accepted from ARCADE_API_KEY" \
-        || miss "ARCADE_API_KEY not set — edit arcade.conf to add key"
-    else
-      echo "  Your OpenRouter API key (input hidden):"
-      while true; do
-        read -rsp "  Key: " raw_key
-        echo ""
-        if [[ "$raw_key" == sk-or-* ]]; then
-          ANTHROPIC_API_KEY="$raw_key"
-          OPENROUTER_API_KEY="$raw_key"
-          ok "key accepted"
-          break
-        else
-          echo -e "  ${YELLOW}Key should start with sk-or- — try again or Ctrl+C to exit${RESET}"
-        fi
-      done
-    fi
     ;;
-  3)
-    INFERENCE_MODE="api"
-    ANTHROPIC_BASE_URL="https://api.anthropic.com"
+  mix)
+    echo "  Configuring OAuth path (for [REASONING] chunks)..."
+    _configure_oauth
     echo ""
-    if $YES_MODE; then
-      ANTHROPIC_API_KEY="${ARCADE_API_KEY:-}"
-      [[ -n "$ANTHROPIC_API_KEY" ]] && ok "key accepted from ARCADE_API_KEY" \
-        || miss "ARCADE_API_KEY not set — edit arcade.conf to add key"
-    else
-      echo "  Your Anthropic API key (input hidden):"
-      while true; do
-        read -rsp "  Key: " raw_key
-        echo ""
-        if [[ "$raw_key" == sk-ant-* ]]; then
-          ANTHROPIC_API_KEY="$raw_key"
-          ok "key accepted"
-          break
-        else
-          echo -e "  ${YELLOW}Key should start with sk-ant- — try again or Ctrl+C to exit${RESET}"
-        fi
-      done
-    fi
-    ;;
-  4)
-    INFERENCE_MODE="api"
-    echo ""
-    raw_litellm_url="$(ask "LiteLLM proxy URL" "http://localhost:4000")"
-    ANTHROPIC_BASE_URL="$raw_litellm_url"
-    echo ""
-    if curl -sf --max-time 5 "${ANTHROPIC_BASE_URL}/health" &>/dev/null; then
-      ok "LiteLLM reachable at $ANTHROPIC_BASE_URL"
-    else
-      miss "LiteLLM not responding at $ANTHROPIC_BASE_URL — check proxy before running loops"
-    fi
-    echo ""
-    echo "  LiteLLM master key for spend logging (input hidden, press Enter to skip):"
-    read -rsp "  Key: " LITELLM_MASTER_KEY || true
-    echo ""
-    if [[ -n "${LITELLM_MASTER_KEY}" ]]; then
-      ok "LiteLLM key accepted"
-    else
-      miss "LiteLLM key not set — cost= field will show \$0.0000 in run-log"
-    fi
-    ;;
-  *)
-    die "Invalid backend choice."
+    echo "  Configuring API path (for [SCAFFOLD] chunks)..."
+    _configure_api
+    INFERENCE_MODE="mix"
     ;;
 esac
 
@@ -984,18 +1070,41 @@ cat > "$CONF_FILE" << CONFEOF
 # Edit this file to change your configuration.
 # Do not commit this file to version control.
 
-# ── Inference backend ─────────────────────────────────────────────────────────
-# ANTHROPIC_BASE_URL: inference endpoint
-#   Claude Max (OAuth): leave empty
-#   OpenRouter:         https://openrouter.ai/api/v1
-#   Anthropic direct:   https://api.anthropic.com
-#   LiteLLM proxy:      http://your-host:4000
+# ── Backend mode ──────────────────────────────────────────────────────────────
+# BACKEND_MODE: oauth | api | mix
+#   oauth — all chunks use Claude Max subscription (no API key needed)
+#   api   — all chunks use API_ENDPOINT / API_KEY
+#   mix   — [REASONING] chunks → oauth path, [SCAFFOLD] chunks → api path
+BACKEND_MODE="${BACKEND_MODE}"
+
+# ── OAuth provider (used when BACKEND_MODE=oauth or mix) ─────────────────────
+# OAUTH_PROVIDER: claude-max | claude-pro | custom
+#   claude-max  — native claude auth session, no key required
+#   claude-pro  — Anthropic API key used for OAuth path
+#   custom      — arbitrary endpoint, set OAUTH_ENDPOINT below
+OAUTH_PROVIDER="${OAUTH_PROVIDER}"
+OAUTH_ENDPOINT="${OAUTH_ENDPOINT}"
+
+# ── API provider (used when BACKEND_MODE=api or mix) ─────────────────────────
+# API_PROVIDER: litellm | openrouter | anthropic | openai | custom
+# API_ENDPOINT: base URL without trailing /v1 — Claude Code appends /v1 itself
+# API_MODEL: model name passed to --model; leave blank for default
+API_PROVIDER="${API_PROVIDER}"
+API_ENDPOINT="${API_ENDPOINT}"
+API_KEY="${API_KEY}"
+API_MODEL="${API_MODEL}"
+
+# ── Queue path for mix-mode chunk detection ───────────────────────────────────
+# Path to the active project's queue.md. start-arcade.sh reads the next pending
+# chunk label ([REASONING] or [SCAFFOLD]) to pick the right backend in mix mode.
+# Set by masterarcade.sh at runtime; override here only for manual invocations.
+QUEUE_PATH=""
+
+# ── Legacy / direct override ──────────────────────────────────────────────────
+# These are set at runtime by start-arcade.sh from the values above.
+# You can override them manually to bypass the backend routing logic.
 ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL}"
-
-# ANTHROPIC_API_KEY: your API key (leave empty for OAuth mode)
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}"
-
-# INFERENCE_MODE: set during setup — informational only
 INFERENCE_MODE="${INFERENCE_MODE}"
 
 # ── OpenRouter balance monitoring ─────────────────────────────────────────────
@@ -1005,7 +1114,7 @@ OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
 # ── LiteLLM spend logging ─────────────────────────────────────────────────────
 # Enables the cost= field in run-log.md
 LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY}"
-LITELLM_URL="${ANTHROPIC_BASE_URL}"
+LITELLM_URL="${API_ENDPOINT}"
 
 # ── Project state ─────────────────────────────────────────────────────────────
 ARCADE_STATE_ROOT="${STATE_ROOT}"
@@ -1039,56 +1148,89 @@ print_header "verify" "deps > install > backend > state > calx > mcp > [verify]"
 _verify_ok=false
 _verify_err=""
 
-case "$backend_choice" in
-  1)
-    # OAuth — check claude --version
-    if command -v claude &>/dev/null && claude --version &>/dev/null 2>&1; then
-      _verify_ok=true
-    else
-      _verify_err="claude CLI not found or not working"
-    fi
-    ;;
-  2)
-    # OpenRouter — GET /api/v1/auth/key
-    if [[ -n "${ANTHROPIC_API_KEY}" ]]; then
+# Verify the oauth path if applicable
+_verify_oauth() {
+  if command -v claude &>/dev/null && claude --version &>/dev/null 2>&1; then
+    _verify_ok=true
+    case "${OAUTH_PROVIDER:-claude-max}" in
+      claude-max)
+        ok "oauth path: claude CLI present"
+        ;;
+      claude-pro)
+        if [[ -n "${ANTHROPIC_API_KEY}" ]]; then
+          _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            "https://api.anthropic.com/v1/models" 2>/dev/null || echo "000")
+          [[ "$_http_status" == "200" ]] \
+            && ok "oauth path: Anthropic API key valid" \
+            || miss "oauth path: HTTP ${_http_status} from api.anthropic.com — check key"
+        fi
+        ;;
+      custom)
+        ok "oauth path: custom endpoint ${OAUTH_ENDPOINT}"
+        ;;
+    esac
+  else
+    _verify_err="claude CLI not found or not working"
+    _verify_ok=false
+  fi
+}
+
+# Verify the api path if applicable
+_verify_api() {
+  if [[ -z "${API_ENDPOINT}" ]]; then
+    _verify_err="API_ENDPOINT is not set"
+    return
+  fi
+  case "${API_PROVIDER:-litellm}" in
+    litellm)
       _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
-        -H "Authorization: Bearer ${ANTHROPIC_API_KEY}" \
-        "https://openrouter.ai/api/v1/auth/key" 2>/dev/null || echo "000")
+        "${API_ENDPOINT}/health" 2>/dev/null || echo "000")
       if [[ "$_http_status" == "200" ]]; then
         _verify_ok=true
+        ok "api path: LiteLLM reachable at ${API_ENDPOINT}"
       else
-        _verify_err="HTTP ${_http_status} from openrouter.ai/api/v1/auth/key"
+        _verify_err="HTTP ${_http_status} from ${API_ENDPOINT}/health"
       fi
-    else
-      _verify_err="API key is empty"
-    fi
-    ;;
-  3)
-    # Anthropic direct — GET /v1/models
-    if [[ -n "${ANTHROPIC_API_KEY}" ]]; then
-      _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
-        -H "x-api-key: ${ANTHROPIC_API_KEY}" \
-        -H "anthropic-version: 2023-06-01" \
-        "https://api.anthropic.com/v1/models" 2>/dev/null || echo "000")
-      if [[ "$_http_status" == "200" ]]; then
-        _verify_ok=true
+      ;;
+    openrouter)
+      if [[ -n "${API_KEY}" ]]; then
+        _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
+          -H "Authorization: Bearer ${API_KEY}" \
+          "https://openrouter.ai/api/v1/auth/key" 2>/dev/null || echo "000")
+        [[ "$_http_status" == "200" ]] \
+          && { _verify_ok=true; ok "api path: OpenRouter key valid"; } \
+          || _verify_err="HTTP ${_http_status} from openrouter.ai"
       else
-        _verify_err="HTTP ${_http_status} from api.anthropic.com/v1/models"
+        _verify_err="API_KEY is empty"
       fi
-    else
-      _verify_err="API key is empty"
-    fi
-    ;;
-  4)
-    # LiteLLM — GET {url}/health
-    _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
-      "${ANTHROPIC_BASE_URL}/health" 2>/dev/null || echo "000")
-    if [[ "$_http_status" == "200" ]]; then
+      ;;
+    anthropic)
+      if [[ -n "${API_KEY}" ]]; then
+        _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
+          -H "x-api-key: ${API_KEY}" \
+          -H "anthropic-version: 2023-06-01" \
+          "https://api.anthropic.com/v1/models" 2>/dev/null || echo "000")
+        [[ "$_http_status" == "200" ]] \
+          && { _verify_ok=true; ok "api path: Anthropic API key valid"; } \
+          || _verify_err="HTTP ${_http_status} from api.anthropic.com"
+      else
+        _verify_err="API_KEY is empty"
+      fi
+      ;;
+    openai|custom)
+      ok "api path: ${API_PROVIDER} at ${API_ENDPOINT} — not verified (no health endpoint)"
       _verify_ok=true
-    else
-      _verify_err="HTTP ${_http_status} from ${ANTHROPIC_BASE_URL}/health"
-    fi
-    ;;
+      ;;
+  esac
+}
+
+case "$BACKEND_MODE" in
+  oauth) _verify_oauth ;;
+  api)   _verify_api   ;;
+  mix)   _verify_oauth; _verify_api ;;
+  *)     _verify_ok=true ;;
 esac
 
 if $_verify_ok; then

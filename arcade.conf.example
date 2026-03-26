@@ -3,19 +3,46 @@
 # arcade.conf is gitignored — never commit it.
 # Run ./setup.sh for an interactive configuration walkthrough.
 
-# ── Inference backend ─────────────────────────────────────────────────────────
-# Option A: Claude Max subscription (OAuth) — no API key required
-#   ANTHROPIC_BASE_URL="https://api.anthropic.com"
-#   ANTHROPIC_API_KEY=""
-# Option B: OpenRouter
-#   ANTHROPIC_BASE_URL="https://openrouter.ai/api/v1"
-# Option C: Anthropic direct
-#   ANTHROPIC_BASE_URL="https://api.anthropic.com"
-# Option D: Local LiteLLM proxy
-#   ANTHROPIC_BASE_URL="http://your-litellm-host:4000"
+# ── Backend mode ──────────────────────────────────────────────────────────────
+# oauth  — all chunks use Claude Max subscription ($0 per token)
+# api    — all chunks use API_ENDPOINT / API_KEY (pay per token)
+# mix    — [REASONING] chunks → oauth path, [SCAFFOLD] chunks → api path
+BACKEND_MODE="oauth"
 
-ANTHROPIC_BASE_URL="https://api.anthropic.com"
-ANTHROPIC_API_KEY="your-key-here"
+# ── OAuth provider (used when BACKEND_MODE=oauth or mix) ─────────────────────
+# claude-max  — native claude auth session (recommended, no extra key needed)
+# claude-pro  — Anthropic API key used on the oauth path
+# custom      — arbitrary endpoint; set OAUTH_ENDPOINT below
+OAUTH_PROVIDER="claude-max"
+OAUTH_ENDPOINT=""
+
+# ── API provider (used when BACKEND_MODE=api or mix) ─────────────────────────
+# litellm    — local LiteLLM proxy (recommended for MooseNet / self-hosted)
+# openrouter — openrouter.ai (pay per token, multi-model access)
+# anthropic  — Anthropic API direct
+# openai     — OpenAI API direct
+# custom     — arbitrary endpoint
+#
+# IMPORTANT: API_ENDPOINT must NOT include a trailing /v1.
+#   Claude Code appends /v1 automatically. Store the base URL only.
+#   Correct:   API_ENDPOINT="http://192.168.0.215:4000"
+#   Wrong:     API_ENDPOINT="http://192.168.0.215:4000/v1"
+API_PROVIDER="litellm"
+API_ENDPOINT="http://your-litellm-host:4000"
+API_KEY="your-api-key-here"
+API_MODEL=""   # model name passed to --model; leave blank for per-mode defaults
+
+# ── Queue path for mix-mode chunk detection ───────────────────────────────────
+# Path to the active project's queue.md. start-arcade.sh reads the next pending
+# chunk label ([REASONING] or [SCAFFOLD]) to select the backend in mix mode.
+# masterarcade.sh sets this at runtime; override here for manual invocations only.
+QUEUE_PATH=""
+
+# ── Legacy / direct override ──────────────────────────────────────────────────
+# start-arcade.sh derives ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY from the
+# provider config above at runtime. Set these manually only to bypass routing.
+ANTHROPIC_BASE_URL=""
+ANTHROPIC_API_KEY=""
 
 # ── OpenRouter (for balance checks and direct OpenRouter routing) ─────────────
 # Leave blank if not using OpenRouter.
