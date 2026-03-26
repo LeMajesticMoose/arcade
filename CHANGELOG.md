@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.1 — 2026-03-26
+
+### Fixed
+- **pip optional** — missing pip/pip3 no longer exits setup; prints informational
+  warning and continues; Calx install is skipped gracefully if pip is absent
+- **python3-venv fallback** — before attempting venv creation for Calx, checks if
+  `python3 -m venv` works; if not, attempts `apt-get install python3.11-venv` /
+  `python3-venv`; if that fails, falls back to `pip install --user` without venv
+- **LiteLLM cross-node false negative** — health check timeout increased to 3 seconds;
+  result is now a warning (`–`) not a failure; URL is saved to arcade.conf regardless
+- **GitHub validation HTTP code** — replaced `-sf` with `-s` (no fail-on-error) so
+  curl always returns a clean numeric HTTP code; added explicit 401 case (invalid
+  token / insufficient scope) in addition to 200, 404, and other
+- **Non-TTY / automation flag** — added `--yes` flag for non-interactive use; skips
+  all optional installs and interactive prompts, accepts defaults; reads credentials
+  from env vars `ARCADE_BACKEND`, `ARCADE_API_KEY`, `ARCADE_STATE_ROOT`; documented
+  in script header comment
+
 ## v0.2.0 — 2026-03-25
 
 ### Added

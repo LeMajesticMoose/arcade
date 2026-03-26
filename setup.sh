@@ -1,9 +1,30 @@
 #!/usr/bin/env bash
 # ARCADE setup — curl-pipe bootstrap installer
-# Usage: bash -c "$(curl -fsSL https://raw.githubusercontent.com/LeMajesticMoose/arcade/main/setup.sh)"
+#
+# Usage:
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/LeMajesticMoose/arcade/main/setup.sh)"
+#
+# Flags:
+#   --yes   Non-interactive mode. Skips all optional installs (Claude CLI, Calx,
+#           MCP server setup) and accepts all directory/backend defaults.
+#           Supply credentials via environment variables:
+#             ARCADE_BACKEND     1=OAuth 2=OpenRouter 3=Anthropic 4=LiteLLM (default: 1)
+#             ARCADE_API_KEY     API key for chosen backend
+#             ARCADE_STATE_ROOT  State directory (default: ~/.arcade/projects)
+#           Example:
+#             ARCADE_BACKEND=2 ARCADE_API_KEY=sk-or-... \
+#               bash -c "$(curl -fsSL .../setup.sh)" -- --yes
 set -euo pipefail
 
-ARCADE_SETUP_VERSION="0.2.0"
+ARCADE_SETUP_VERSION="0.2.1"
+
+# ── --yes / non-interactive flag ──────────────────────────────────────────────
+YES_MODE=false
+for _arg in "$@"; do
+  if [[ "$_arg" == "--yes" ]]; then
+    YES_MODE=true
+  fi
+done
 ARCADE_REPO="https://github.com/LeMajesticMoose/arcade"
 ARCADE_RAW="https://raw.githubusercontent.com/LeMajesticMoose/arcade/main"
 
@@ -30,6 +51,10 @@ die() {
 ask() {
   local prompt="$1" default="${2:-}"
   local result
+  if $YES_MODE; then
+    echo "${default}"
+    return
+  fi
   if [[ -n "$default" ]]; then
     read -rp "  ${prompt} [${default}]: " result
     echo "${result:-$default}"
@@ -42,6 +67,11 @@ ask() {
 ask_yn() {
   local prompt="$1" default="${2:-n}"
   local result
+  if $YES_MODE; then
+    # In --yes mode, only answer yes to truly optional prompts if default is y
+    [[ "$default" =~ ^[Yy]$ ]]
+    return
+  fi
   read -rp "  ${prompt} [y/N]: " result
   result="${result:-$default}"
   [[ "$result" =~ ^[Yy]$ ]]
@@ -82,7 +112,9 @@ echo "  4. Install optional components"
 echo "  5. Run a smoketest to verify everything works"
 echo "  6. Show you how to start your first real project"
 echo ""
-read -rp "Press Enter to continue or Ctrl+C to exit." _discard
+if ! $YES_MODE; then
+  read -rp "Press Enter to continue or Ctrl+C to exit." _discard
+fi
 echo ""
 
 # ── stage 2: dependency check ─────────────────────────────────────────────────
@@ -100,7 +132,7 @@ for tool in git curl python3; do
   fi
 done
 
-# pip
+# pip — optional (needed for Calx install only)
 pip_cmd=""
 if command -v pip3 &>/dev/null; then
   ok "pip3"
@@ -109,17 +141,16 @@ elif command -v pip &>/dev/null; then
   ok "pip"
   pip_cmd="pip"
 else
-  fail "pip   required for Calx install"
-  req_missing=$((req_missing + 1))
+  miss "pip   not found — Calx install will be skipped (install python3-pip to enable)"
 fi
 
 if [[ "$req_missing" -gt 0 ]]; then
   echo ""
   echo -e "${RED}${BOLD}Required tools are missing. Install them and re-run.${RESET}"
   echo ""
-  echo "  Ubuntu/Debian:  sudo apt install git curl python3 python3-pip"
+  echo "  Ubuntu/Debian:  sudo apt install git curl python3"
   echo "  macOS:          brew install git curl python3"
-  echo "  Fedora/RHEL:    sudo dnf install git curl python3 python3-pip"
+  echo "  Fedora/RHEL:    sudo dnf install git curl python3"
   echo ""
   exit 1
 fi
@@ -135,12 +166,17 @@ else
   echo ""
   echo "  Claude Code CLI is required to run ARCADE loops."
   echo ""
-  echo "  [1] npm install -g @anthropic-ai/claude-code  (recommended)"
-  echo "  [2] See manual install: https://docs.anthropic.com/en/docs/claude-code"
-  echo "  [3] Skip for now (loops will not run)"
-  echo ""
-  read -rp "  Choice [1]: " claude_install_choice
-  claude_install_choice="${claude_install_choice:-1}"
+  if $YES_MODE; then
+    miss "claude   --yes mode — skipping install (install manually before running loops)"
+    claude_install_choice="3"
+  else
+    echo "  [1] npm install -g @anthropic-ai/claude-code  (recommended)"
+    echo "  [2] See manual install: https://docs.anthropic.com/en/docs/claude-code"
+    echo "  [3] Skip for now (loops will not run)"
+    echo ""
+    read -rp "  Choice [1]: " claude_install_choice
+    claude_install_choice="${claude_install_choice:-1}"
+  fi
 
   case "$claude_install_choice" in
     1)
@@ -201,11 +237,11 @@ else
 fi
 
 litellm_ok=false
-if curl -sf --max-time 2 "http://localhost:4000/health" &>/dev/null; then
+if curl -sf --max-time 3 "http://localhost:4000/health" &>/dev/null; then
   ok "litellm  proxy detected on localhost:4000"
   litellm_ok=true
 else
-  miss "litellm  not detected on localhost:4000"
+  miss "litellm  not responding — check connectivity after setup"
 fi
 
 mcp_ok=false
@@ -347,8 +383,13 @@ echo "      Self-hosted proxy mixing local and API models"
 echo "      Best for: distributed setups, users with local inference hardware"
 echo "      Requires: LiteLLM running at a reachable address"
 echo ""
-read -rp "  Choice [1]: " backend_choice
-backend_choice="${backend_choice:-1}"
+if $YES_MODE; then
+  backend_choice="${ARCADE_BACKEND:-1}"
+  echo "  (--yes mode: using backend ${backend_choice})"
+else
+  read -rp "  Choice [1]: " backend_choice
+  backend_choice="${backend_choice:-1}"
+fi
 
 ANTHROPIC_BASE_URL=""
 ANTHROPIC_API_KEY=""
@@ -376,36 +417,49 @@ case "$backend_choice" in
     INFERENCE_MODE="api"
     ANTHROPIC_BASE_URL="https://openrouter.ai/api/v1"
     echo ""
-    echo "  Your OpenRouter API key (input hidden):"
-    while true; do
-      read -rsp "  Key: " raw_key
-      echo ""
-      if [[ "$raw_key" == sk-or-* ]]; then
-        ANTHROPIC_API_KEY="$raw_key"
-        OPENROUTER_API_KEY="$raw_key"
-        ok "key accepted"
-        break
-      else
-        echo -e "  ${YELLOW}Key should start with sk-or- — try again or Ctrl+C to exit${RESET}"
-      fi
-    done
+    if $YES_MODE; then
+      ANTHROPIC_API_KEY="${ARCADE_API_KEY:-}"
+      OPENROUTER_API_KEY="${ARCADE_API_KEY:-}"
+      [[ -n "$ANTHROPIC_API_KEY" ]] && ok "key accepted from ARCADE_API_KEY" \
+        || miss "ARCADE_API_KEY not set — edit arcade.conf to add key"
+    else
+      echo "  Your OpenRouter API key (input hidden):"
+      while true; do
+        read -rsp "  Key: " raw_key
+        echo ""
+        if [[ "$raw_key" == sk-or-* ]]; then
+          ANTHROPIC_API_KEY="$raw_key"
+          OPENROUTER_API_KEY="$raw_key"
+          ok "key accepted"
+          break
+        else
+          echo -e "  ${YELLOW}Key should start with sk-or- — try again or Ctrl+C to exit${RESET}"
+        fi
+      done
+    fi
     ;;
   3)
     INFERENCE_MODE="api"
     ANTHROPIC_BASE_URL="https://api.anthropic.com"
     echo ""
-    echo "  Your Anthropic API key (input hidden):"
-    while true; do
-      read -rsp "  Key: " raw_key
-      echo ""
-      if [[ "$raw_key" == sk-ant-* ]]; then
-        ANTHROPIC_API_KEY="$raw_key"
-        ok "key accepted"
-        break
-      else
-        echo -e "  ${YELLOW}Key should start with sk-ant- — try again or Ctrl+C to exit${RESET}"
-      fi
-    done
+    if $YES_MODE; then
+      ANTHROPIC_API_KEY="${ARCADE_API_KEY:-}"
+      [[ -n "$ANTHROPIC_API_KEY" ]] && ok "key accepted from ARCADE_API_KEY" \
+        || miss "ARCADE_API_KEY not set — edit arcade.conf to add key"
+    else
+      echo "  Your Anthropic API key (input hidden):"
+      while true; do
+        read -rsp "  Key: " raw_key
+        echo ""
+        if [[ "$raw_key" == sk-ant-* ]]; then
+          ANTHROPIC_API_KEY="$raw_key"
+          ok "key accepted"
+          break
+        else
+          echo -e "  ${YELLOW}Key should start with sk-ant- — try again or Ctrl+C to exit${RESET}"
+        fi
+      done
+    fi
     ;;
   4)
     INFERENCE_MODE="api"
@@ -440,7 +494,7 @@ hdr "Project state"
 echo "ARCADE stores project queues, run logs, and context files in a"
 echo "persistent directory. This should survive reboots — avoid /tmp."
 echo ""
-raw_state_root="$(ask "State directory" "${HOME}/.arcade/projects")"
+raw_state_root="$(ask "State directory" "${ARCADE_STATE_ROOT:-${HOME}/.arcade/projects}")"
 STATE_ROOT="${raw_state_root/#\~/${HOME}}"
 
 mkdir -p "$STATE_ROOT"
@@ -479,20 +533,40 @@ CALX_VENV="${calx_venv_found}"
 if $calx_ok; then
   ok "Calx already installed"
 else
-  if ask_yn "Install Calx now?" "y"; then
+  if [[ -z "$pip_cmd" ]]; then
+    miss "Calx install skipped — pip not available (install python3-pip to enable)"
+  elif ask_yn "Install Calx now?" "y"; then
     echo ""
     calx_install_ok=false
 
+    # Try pip --user first
     if $pip_cmd install getcalx --quiet --user 2>/dev/null; then
       calx_install_ok=true
       ok "Calx installed via ${pip_cmd} --user"
     else
-      echo "  User install failed — trying venv at ${HOME}/.calx-venv..."
+      # Try venv — check if python3-venv is available first
+      echo "  User install failed — checking venv support..."
+      if ! python3 -m venv --help &>/dev/null 2>&1; then
+        echo "  python3-venv not found — attempting to install..."
+        if apt-get install -y python3.11-venv 2>/dev/null \
+           || apt-get install -y python3-venv 2>/dev/null; then
+          ok "python3-venv installed"
+        else
+          miss "python3-venv install failed — falling back to pip --user"
+        fi
+      fi
       if python3 -m venv "${HOME}/.calx-venv" 2>/dev/null \
          && "${HOME}/.calx-venv/bin/pip" install getcalx --quiet 2>/dev/null; then
         calx_install_ok=true
         CALX_VENV="${HOME}/.calx-venv"
         ok "Calx installed in ${HOME}/.calx-venv"
+      else
+        # Final fallback: pip --user without venv
+        echo "  Venv failed — retrying pip --user..."
+        if $pip_cmd install --user getcalx --quiet 2>/dev/null; then
+          calx_install_ok=true
+          ok "Calx installed via ${pip_cmd} --user (fallback)"
+        fi
       fi
     fi
 
@@ -551,20 +625,25 @@ if ask_yn "Set up an MCP server for agent control?"; then
   echo ""
   mcp_git_repo="$(ask "GitHub repo name for ARCADE state" "arcade")"
 
-  # Validate token
+  # Validate token — use -s (silent) without -f so curl exits 0 even on 4xx;
+  # capture the HTTP code directly to avoid malformed codes from error paths
   echo ""
   echo "  Validating GitHub token..."
-  _gh_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
+  _gh_status=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" \
     -H "Authorization: Bearer ${mcp_git_token}" \
     -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/${mcp_git_org}/${mcp_git_repo}" 2>/dev/null || echo "000")
+    "https://api.github.com/repos/${mcp_git_org}/${mcp_git_repo}" 2>/dev/null)
+  _gh_status="${_gh_status:-000}"
   if [[ "$_gh_status" == "200" ]]; then
     ok "GitHub token valid — repo ${mcp_git_org}/${mcp_git_repo} found"
+  elif [[ "$_gh_status" == "401" ]]; then
+    miss "GitHub token invalid or insufficient scope (HTTP 401)"
+    echo "     Token needs 'repo' scope. Edit mcp-server.conf after setup."
   elif [[ "$_gh_status" == "404" ]]; then
-    miss "repo ${mcp_git_org}/${mcp_git_repo} not found — token may be valid but repo does not exist yet"
+    miss "repo ${mcp_git_org}/${mcp_git_repo} not found (HTTP 404) — token may be valid but repo does not exist yet"
     echo "     You can create it later. MCP server will work once the repo exists."
   else
-    miss "GitHub validation returned HTTP ${_gh_status} — token may be invalid or repo inaccessible"
+    miss "GitHub validation returned HTTP ${_gh_status} — check token and org/repo name"
     echo "     Continuing — edit mcp-server.conf to correct credentials."
   fi
 
