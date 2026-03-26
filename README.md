@@ -188,15 +188,23 @@ Calx is a correction engineering system for Claude Code, developed by Spencer Ha
 
 ---
 
-## Dependencies & Attribution
+## Credits & Attribution
 
-| Dependency | Author | License | Link |
-|---|---|---|---|
-| Calx (`getcalx`) | Spencer Hardwick | MIT | [github.com/getcalx/oss](https://github.com/getcalx/oss) |
-| Calx hook scripts | Spencer Hardwick | MIT | [github.com/getcalx/oss](https://github.com/getcalx/oss) |
-| Claude Code CLI | Anthropic | Anthropic Terms of Service | [docs.anthropic.com/en/docs/claude-code](https://docs.anthropic.com/en/docs/claude-code) |
+ARCADE is an implementation of the **[Ralph pattern](https://ghuntley.com/ralph/)** by **[Geoffrey Huntley](https://ghuntley.com)** — an autonomous AI agent loop technique. Read Geoffrey's original article to understand the philosophy behind it.
 
-ARCADE's MIT license does not cover these dependencies. Users are responsible for reviewing and complying with each dependency's license and terms of service independently.
+The community implementation of Ralph is at **[snarktank/ralph](https://github.com/snarktank/ralph)**.
+
+### Dependencies
+
+| Tool | Author | Role in ARCADE |
+|------|--------|----------------|
+| [Claude Code CLI](https://github.com/anthropics/claude-code) | Anthropic | Reasoning engine — the AI that runs inside each loop iteration |
+| [Calx / getcalx](https://github.com/badlogic/calx) | Mario Zechner | Behavioral feedback and cost tracking |
+| [OpenHands](https://github.com/All-Hands-AI/OpenHands) | All Hands AI | Execution agent — scaffolding, file gen, builds |
+| [LiteLLM](https://github.com/BerriAI/litellm) | BerriAI | Inference routing proxy — unifies local and cloud models |
+| [Ollama](https://github.com/ollama/ollama) | Ollama | Local model runtime |
+| [OpenRouter](https://openrouter.ai) | OpenRouter | Cloud model routing |
+| [Anthropic API](https://anthropic.com) | Anthropic | Cloud inference — Claude models via API |
 
 ---
 
