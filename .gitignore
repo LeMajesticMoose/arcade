@@ -14,3 +14,6 @@ arcade.conf
 .DS_Store
 *.swp
 *~
+
+# MCP server credentials
+mcp-server/mcp-server.conf

@@ -1,0 +1,26 @@
+# ARCADE MCP Server configuration
+# Copy to mcp-server.conf and fill in your values.
+# mcp-server.conf is gitignored — do not commit it.
+
+# ── GitHub / Git provider ─────────────────────────────────────────────────────
+# Used by arcade_init_project to create state repos and by status tools
+# to read project state.
+GIT_BASE_URL="https://api.github.com"
+GIT_TOKEN=""
+GIT_ORG=""
+GIT_REPO="arcade"
+
+# ── Inference provider balance monitoring ─────────────────────────────────────
+# INFERENCE_PROVIDER: openrouter | anthropic | openai | ollama | custom
+INFERENCE_PROVIDER="openrouter"
+INFERENCE_API_KEY=""
+INFERENCE_BASE_URL=""
+
+# ── ARCADE state root ─────────────────────────────────────────────────────────
+# Must match ARCADE_STATE_ROOT in arcade.conf
+ARCADE_STATE_ROOT=""
+
+# ── ARCADE installation root ──────────────────────────────────────────────────
+# Path to the directory containing masterarcade.sh
+# Defaults to the parent of this mcp-server/ directory if not set.
+ARCADE_ROOT=""

@@ -3,7 +3,7 @@
 # Usage: bash -c "$(curl -fsSL https://raw.githubusercontent.com/LeMajesticMoose/arcade/main/setup.sh)"
 set -euo pipefail
 
-ARCADE_SETUP_VERSION="1.0.0"
+ARCADE_SETUP_VERSION="0.2.0"
 ARCADE_REPO="https://github.com/LeMajesticMoose/arcade"
 ARCADE_RAW="https://raw.githubusercontent.com/LeMajesticMoose/arcade/main"
 
@@ -131,19 +131,63 @@ if command -v claude &>/dev/null; then
   ok "claude   Claude Code CLI"
   claude_ok=true
 else
-  fail "claude   Claude Code CLI — required to run loops"
+  fail "claude   Claude Code CLI — not found"
   echo ""
-  echo "  Install Claude Code CLI before running ARCADE loops:"
-  echo "  https://docs.anthropic.com/en/docs/claude-code"
-  echo "  (npm install -g @anthropic-ai/claude-code)"
+  echo "  Claude Code CLI is required to run ARCADE loops."
   echo ""
-  if ! ask_yn "Continue setup anyway? Loops will not run until Claude Code is installed."; then
-    echo ""
-    echo "Run setup again after installing Claude Code CLI."
-    exit 0
-  fi
+  echo "  [1] npm install -g @anthropic-ai/claude-code  (recommended)"
+  echo "  [2] See manual install: https://docs.anthropic.com/en/docs/claude-code"
+  echo "  [3] Skip for now (loops will not run)"
   echo ""
-  miss "claude   continuing without Claude Code (install before running loops)"
+  read -rp "  Choice [1]: " claude_install_choice
+  claude_install_choice="${claude_install_choice:-1}"
+
+  case "$claude_install_choice" in
+    1)
+      echo ""
+      if ! command -v npm &>/dev/null; then
+        miss "npm not found — install Node.js first:"
+        echo ""
+        echo "    Ubuntu/Debian:  sudo apt install nodejs npm"
+        echo "    macOS:          brew install node"
+        echo "    Fedora/RHEL:    sudo dnf install nodejs npm"
+        echo "    Or:             https://nodejs.org/en/download"
+        echo ""
+        echo "  After installing Node.js, run:"
+        echo "    npm install -g @anthropic-ai/claude-code"
+        echo "  then re-run this setup script."
+        echo ""
+      else
+        echo "  Running: npm install -g @anthropic-ai/claude-code"
+        echo ""
+        if npm install -g @anthropic-ai/claude-code 2>&1; then
+          if command -v claude &>/dev/null; then
+            ok "claude   Claude Code CLI installed"
+            claude_ok=true
+          else
+            miss "install completed but claude not found in PATH — open a new terminal and re-run setup"
+          fi
+        else
+          miss "npm install failed — try manually: npm install -g @anthropic-ai/claude-code"
+          echo "  Or see: https://docs.anthropic.com/en/docs/claude-code"
+          echo ""
+        fi
+      fi
+      ;;
+    2)
+      echo ""
+      echo "  Manual install: https://docs.anthropic.com/en/docs/claude-code"
+      echo "  After installing, re-run this setup script."
+      echo ""
+      ;;
+    3)
+      echo ""
+      miss "claude   skipped — loops will not run until Claude Code is installed"
+      ;;
+    *)
+      miss "claude   invalid choice — continuing without Claude Code"
+      ;;
+  esac
 fi
 
 # Optional: local inference stack
@@ -474,6 +518,167 @@ else
   ok "OpenHands detected on localhost:3000"
 fi
 
+# ── stage 6b: MCP server ─────────────────────────────────────────────────────
+
+hdr "MCP server (optional)"
+
+echo "An MCP server lets AI agents (IronClaw, Claude Code, or any"
+echo "MCP-compatible agent) control ARCADE directly — start loops,"
+echo "check costs, manage projects — without terminal access."
+echo ""
+
+if ask_yn "Set up an MCP server for agent control?"; then
+
+  # Sub-stage A — framework
+  echo ""
+  echo "  MCP server framework:"
+  echo ""
+  echo "  [1] FastMCP (Python) — lightweight, no build step required"
+  echo "  [2] TypeScript SDK   — Node.js based, broader ecosystem"
+  echo ""
+  read -rp "  Choice [1]: " mcp_framework_choice
+  mcp_framework_choice="${mcp_framework_choice:-1}"
+
+  # Sub-stage B — GitHub credentials
+  echo ""
+  echo "  The MCP server reads project state from GitHub repos."
+  echo "  This requires a GitHub personal access token with repo scope."
+  echo ""
+  mcp_git_org="$(ask "GitHub username or org")"
+  echo ""
+  echo "  GitHub token (repo scope, input hidden):"
+  read -rsp "  Token: " mcp_git_token
+  echo ""
+  mcp_git_repo="$(ask "GitHub repo name for ARCADE state" "arcade")"
+
+  # Validate token
+  echo ""
+  echo "  Validating GitHub token..."
+  _gh_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer ${mcp_git_token}" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${mcp_git_org}/${mcp_git_repo}" 2>/dev/null || echo "000")
+  if [[ "$_gh_status" == "200" ]]; then
+    ok "GitHub token valid — repo ${mcp_git_org}/${mcp_git_repo} found"
+  elif [[ "$_gh_status" == "404" ]]; then
+    miss "repo ${mcp_git_org}/${mcp_git_repo} not found — token may be valid but repo does not exist yet"
+    echo "     You can create it later. MCP server will work once the repo exists."
+  else
+    miss "GitHub validation returned HTTP ${_gh_status} — token may be invalid or repo inaccessible"
+    echo "     Continuing — edit mcp-server.conf to correct credentials."
+  fi
+
+  # Sub-stage C — inference provider for balance checking
+  echo ""
+  echo "  Inference provider for balance monitoring:"
+  echo ""
+  echo "  [1] OpenRouter       — sk-or-..."
+  echo "  [2] Anthropic direct — sk-ant-..."
+  echo "  [3] OpenAI           — sk-..."
+  echo "  [4] Local Ollama     — no balance API, usage from run-logs"
+  echo "  [5] Custom URL       — enter endpoint manually"
+  echo ""
+  read -rp "  Choice [1]: " mcp_provider_choice
+  mcp_provider_choice="${mcp_provider_choice:-1}"
+
+  mcp_inference_provider=""
+  mcp_inference_key=""
+  mcp_inference_base_url=""
+
+  case "$mcp_provider_choice" in
+    1)
+      mcp_inference_provider="openrouter"
+      echo ""
+      echo "  OpenRouter API key (input hidden):"
+      read -rsp "  Key: " mcp_inference_key
+      echo ""
+      ok "key accepted"
+      ;;
+    2)
+      mcp_inference_provider="anthropic"
+      echo ""
+      echo "  Anthropic API key (input hidden):"
+      read -rsp "  Key: " mcp_inference_key
+      echo ""
+      ok "key accepted"
+      ;;
+    3)
+      mcp_inference_provider="openai"
+      echo ""
+      echo "  OpenAI API key (input hidden):"
+      read -rsp "  Key: " mcp_inference_key
+      echo ""
+      ok "key accepted"
+      ;;
+    4)
+      mcp_inference_provider="ollama"
+      mcp_inference_base_url="$(ask "Ollama URL" "http://localhost:11434")"
+      miss "Ollama has no balance API — arcade_get_balance will return usage estimates from run-logs"
+      ;;
+    5)
+      mcp_inference_provider="custom"
+      mcp_inference_base_url="$(ask "Inference base URL")"
+      echo ""
+      echo "  API key for custom provider (input hidden, press Enter to skip):"
+      read -rsp "  Key: " mcp_inference_key || true
+      echo ""
+      ;;
+    *)
+      mcp_inference_provider="openrouter"
+      miss "invalid choice — defaulting to openrouter (edit mcp-server.conf to correct)"
+      ;;
+  esac
+
+  # Sub-stage D — write mcp-server.conf and configure
+  echo ""
+  mcp_dir="${INSTALL_DIR}/mcp-server"
+
+  if [[ ! -d "$mcp_dir" ]]; then
+    miss "mcp-server/ directory not found in ${INSTALL_DIR}"
+    echo "     Re-clone ARCADE or check your install directory."
+  else
+    chmod +x "${mcp_dir}/start.sh" 2>/dev/null || true
+
+    cat > "${mcp_dir}/mcp-server.conf" << MCPCONF
+# ARCADE MCP Server configuration — generated by setup.sh
+# Do not commit this file.
+
+# GitHub / Git provider
+GIT_BASE_URL="https://api.github.com"
+GIT_TOKEN="${mcp_git_token}"
+GIT_ORG="${mcp_git_org}"
+GIT_REPO="${mcp_git_repo}"
+
+# Inference provider balance monitoring
+INFERENCE_PROVIDER="${mcp_inference_provider}"
+INFERENCE_API_KEY="${mcp_inference_key}"
+INFERENCE_BASE_URL="${mcp_inference_base_url}"
+
+# ARCADE state root — must match ARCADE_STATE_ROOT in arcade.conf
+ARCADE_STATE_ROOT="${STATE_ROOT}"
+
+# ARCADE installation root
+ARCADE_ROOT="${INSTALL_DIR}"
+MCPCONF
+
+    ok "mcp-server.conf written"
+
+    if [[ "$mcp_framework_choice" == "2" ]]; then
+      miss "TypeScript path selected — run 'npm install && npm run build' in ${mcp_dir} before starting"
+    fi
+
+    echo ""
+    echo -e "  ${GREEN}MCP server ready.${RESET} Start with:"
+    echo "    cd ${mcp_dir} && ./start.sh"
+    echo ""
+    echo "  Register with Claude Code — add to ~/.claude/settings.json:"
+    echo "    { \"mcpServers\": { \"arcade\": { \"command\": \"${mcp_dir}/start.sh\" } } }"
+  fi
+
+else
+  miss "MCP server skipped — see ADVANCED.md to set up later"
+fi
+
 # ── stage 7: write arcade.conf ────────────────────────────────────────────────
 
 hdr "Writing configuration"
@@ -532,6 +737,75 @@ CALX_VENV="${CALX_VENV}"
 CONFEOF
 
 ok "arcade.conf written to ${INSTALL_DIR}/arcade.conf"
+
+# ── stage 7b: verify backend ──────────────────────────────────────────────────
+
+hdr "Verifying configuration"
+
+_verify_ok=false
+_verify_err=""
+
+case "$backend_choice" in
+  1)
+    # OAuth — check claude --version
+    if command -v claude &>/dev/null && claude --version &>/dev/null 2>&1; then
+      _verify_ok=true
+    else
+      _verify_err="claude CLI not found or not working"
+    fi
+    ;;
+  2)
+    # OpenRouter — GET /api/v1/auth/key
+    if [[ -n "${ANTHROPIC_API_KEY}" ]]; then
+      _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
+        -H "Authorization: Bearer ${ANTHROPIC_API_KEY}" \
+        "https://openrouter.ai/api/v1/auth/key" 2>/dev/null || echo "000")
+      if [[ "$_http_status" == "200" ]]; then
+        _verify_ok=true
+      else
+        _verify_err="HTTP ${_http_status} from openrouter.ai/api/v1/auth/key"
+      fi
+    else
+      _verify_err="API key is empty"
+    fi
+    ;;
+  3)
+    # Anthropic direct — GET /v1/models
+    if [[ -n "${ANTHROPIC_API_KEY}" ]]; then
+      _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
+        -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+        -H "anthropic-version: 2023-06-01" \
+        "https://api.anthropic.com/v1/models" 2>/dev/null || echo "000")
+      if [[ "$_http_status" == "200" ]]; then
+        _verify_ok=true
+      else
+        _verify_err="HTTP ${_http_status} from api.anthropic.com/v1/models"
+      fi
+    else
+      _verify_err="API key is empty"
+    fi
+    ;;
+  4)
+    # LiteLLM — GET {url}/health
+    _http_status=$(curl -sf --max-time 10 -o /dev/null -w "%{http_code}" \
+      "${ANTHROPIC_BASE_URL}/health" 2>/dev/null || echo "000")
+    if [[ "$_http_status" == "200" ]]; then
+      _verify_ok=true
+    else
+      _verify_err="HTTP ${_http_status} from ${ANTHROPIC_BASE_URL}/health"
+    fi
+    ;;
+esac
+
+if $_verify_ok; then
+  ok "backend reachable — credentials valid"
+else
+  fail "backend check failed: ${_verify_err}"
+  echo ""
+  echo "  arcade.conf written but loops may not work until this is resolved."
+  echo "  Common causes: wrong API key, service not running, network issue."
+  echo "  Edit ${INSTALL_DIR}/arcade.conf to correct credentials, then re-run."
+fi
 
 # ── stage 8: smoketest ────────────────────────────────────────────────────────
 
