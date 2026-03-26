@@ -192,14 +192,14 @@ Calx is a correction engineering system for Claude Code, developed by Spencer Ha
 
 ARCADE is an implementation of the **[Ralph pattern](https://ghuntley.com/ralph/)** by **[Geoffrey Huntley](https://ghuntley.com)** — an autonomous AI agent loop technique. Read Geoffrey's original article to understand the philosophy behind it.
 
-The community implementation of Ralph is at **[snarktank/ralph](https://github.com/snarktank/ralph)**.
+The community implementation of Ralph is at **[snarktank/ralph](https://github.com/snarktank/ralph)** by **Ryan Carson**.
 
 ### Dependencies
 
 | Tool | Author | Role in ARCADE |
 |------|--------|----------------|
 | [Claude Code CLI](https://github.com/anthropics/claude-code) | Anthropic | Reasoning engine — the AI that runs inside each loop iteration |
-| [Calx / getcalx](https://github.com/badlogic/calx) | Mario Zechner | Behavioral feedback and cost tracking |
+| [Calx / getcalx](https://github.com/getcalx/oss) | Spencer Hardwick | Behavioral feedback and cost tracking |
 | [OpenHands](https://github.com/All-Hands-AI/OpenHands) | All Hands AI | Execution agent — scaffolding, file gen, builds |
 | [LiteLLM](https://github.com/BerriAI/litellm) | BerriAI | Inference routing proxy — unifies local and cloud models |
 | [Ollama](https://github.com/ollama/ollama) | Ollama | Local model runtime |
